@@ -1,0 +1,42 @@
+# Configuration for Two-Stage Chart-to-Table -> Table QA Pipeline
+
+project:
+  name: "Chart-to-Table-QA"
+  experiment_name: "baseline_deplot_qa"
+  seed: 42
+
+data:
+  dataset_name: "ChartQA"  # Supported: "ChartQA", "PlotQA"
+  data_dir: "data"
+  raw_dir: "data/raw"
+  sanity_dir: "data/sanity"
+  split: "test"            # "train", "val", "test"
+  batch_size: 4
+  num_workers: 2
+
+# Module B5: DePlot Stage (Chart -> Table)
+deplot:
+  model_name_or_path: "google/deplot"
+  device: "cuda"           # "cuda" or "cpu"
+  torch_dtype: "float16"   # "float16", "bfloat16", or "float32"
+  max_new_tokens: 512
+  prompt: "Generate underlying data table of the figure below:"
+
+# Module B5: Table QA Stage (Table + Question -> Answer)
+table_qa:
+  model_provider: "vlm_stub"  # e.g., "vlm_stub", "openai", "huggingface"
+  model_name: "gpt-4o-mini"
+  temperature: 0.0
+  max_tokens: 128
+  system_prompt: >-
+    You are a precise reasoning assistant. Given a table extracted from a chart
+    and a question, answer the question accurately based strictly on the table.
+
+# Module B2 & B6: Metrics & Evaluation
+evaluation:
+  metrics:
+    - "rms_f1"
+    - "rnss"
+    - "qa_accuracy"
+  save_predictions: true
+  output_dir: "outputs/predictions"

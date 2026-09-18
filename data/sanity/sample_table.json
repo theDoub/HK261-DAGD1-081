@@ -1,0 +1,23 @@
+{
+  "title": "Quarterly Revenue by Region (in Million USD)",
+  "columns": [
+    "Region",
+    "Q1",
+    "Q2",
+    "Q3",
+    "Q4"
+  ],
+  "rows": [
+    ["North America", 150.5, 162.3, 175.0, 190.2],
+    ["Europe", 98.2, 104.5, 110.0, 118.4],
+    ["Asia Pacific", 120.0, 135.2, 142.8, 160.1],
+    ["Latin America", 35.1, 38.0, 41.2, 45.0]
+  ],
+  "metadata": {
+    "chart_type": "vertical_bar",
+    "source_dataset": "ChartQA",
+    "image_id": "sanity_sample_001.png",
+    "question": "Which region recorded the highest revenue in Q4?",
+    "ground_truth_answer": "North America"
+  }
+}
