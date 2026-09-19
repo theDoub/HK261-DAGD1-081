@@ -1,115 +1,131 @@
-"""Module B4: Dataset Loader Stubs for ChartQA and PlotQA.
+"""Module B4: Real Dataset Loader for ChartQA / PlotQA.
 
-Provides structured data ingestion interfaces for multimodal chart question-answering
-benchmarks (ChartQA, PlotQA) and local sanity datasets.
+Provides structured ingestion pairing chart images with corresponding gold CSV tables,
+parsing them into Module B1 TableSchema representations with robust error logging.
 """
 
 from __future__ import annotations
 
-import json
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Union
 
+from src.format.parser import parse_csv_table
 from src.format.schema import TableSchema
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
 class ChartDatasetItem:
-    """Represents a single multimodal sample in the pipeline.
+    """Represents a multimodal chart sample in the evaluation pipeline.
 
     Attributes:
-        id (str): Unique sample identifier.
-        image_path (Optional[Path]): Path to the chart image file (PNG/JPG).
-        question (str): Question prompt targeting information in the chart.
-        answer (Optional[str]): Ground truth answer string or number.
-        table (Optional[TableSchema]): Ground truth underlying table representation if available.
-        metadata (Dict[str, Any]): Additional dataset properties (e.g. chart type, split, source).
+        id (str): Unique sample identifier (e.g. image filename or stem).
+        image_path: Path to the chart image (PNG/JPG).
+        table (Optional[TableSchema]): Parsed ground-truth table representation.
+        csv_path (Optional[Path]): Path to the raw gold CSV table.
+        metadata (Dict[str, Any]): Additional dataset properties (chart type, split, source).
     """
 
     id: str
-    question: str
     image_path: Optional[Path] = None
-    answer: Optional[str] = None
     table: Optional[TableSchema] = None
+    csv_path: Optional[Path] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
 class ChartDataLoader:
-    """Dataset loader stub for ChartQA, PlotQA, and local sanity datasets.
-
-    Handles loading annotations, pairing image paths with tabular data,
-    and batching samples for two-stage model evaluation.
-    """
+    """Dataset loader pairing chart images with corresponding ground-truth CSV tables."""
 
     def __init__(
         self,
-        dataset_name: str = "ChartQA",
-        data_dir: Union[str, Path] = "data",
+        data_dir: Union[str, Path] = "data/raw",
         split: str = "test",
+        images_dirname: str = "images",
+        tables_dirname: str = "tables",
     ) -> None:
-        """Initializes the loader with target dataset configuration.
+        """Initializes the loader.
 
         Args:
-            dataset_name: Name of the dataset ('ChartQA', 'PlotQA', or 'sanity').
-            data_dir: Root directory for data storage.
-            split: Dataset partition ('train', 'val', 'test', 'sanity').
+            data_dir: Root dataset folder (e.g. data/raw/chartqa).
+            split: Partition ('train', 'val', 'test').
+            images_dirname: Subfolder name for chart images.
+            tables_dirname: Subfolder name for gold CSV tables.
         """
-        self.dataset_name = dataset_name
         self.data_dir = Path(data_dir)
         self.split = split
-        self._samples: List[ChartDatasetItem] = []
+        self.split_dir = self.data_dir / split if (self.data_dir / split).exists() else self.data_dir
+        self.images_dir = self.split_dir / images_dirname
+        self.tables_dir = self.split_dir / tables_dirname
+        self._items: List[ChartDatasetItem] = []
 
-    def load_sanity_data(self, sanity_json_path: Optional[Union[str, Path]] = None) -> List[ChartDatasetItem]:
-        """Loads mock table and QA sample from data/sanity for quick smoke testing.
+    def load_table_from_csv(self, csv_path: Path) -> Optional[TableSchema]:
+        """Reads a CSV file and converts it into a TableSchema with normalized cells and triplets.
 
         Args:
-            sanity_json_path: Optional path to sanity JSON file. Defaults to data/sanity/sample_table.json.
+            csv_path: Path to the CSV file.
 
         Returns:
-            List[ChartDatasetItem]: List containing the sanity dataset items.
+            Optional[TableSchema]: Parsed table structure or None on failure.
         """
-        path = Path(sanity_json_path) if sanity_json_path else self.data_dir / "sanity" / "sample_table.json"
+        if not csv_path.exists():
+            logger.error("Missing ground-truth CSV table: %s", csv_path)
+            return None
 
-        if not path.exists():
-            raise FileNotFoundError(f"Sanity data file not found at: {path}")
+        try:
+            with open(csv_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            table = parse_csv_table(content)
+            table.title = csv_path.stem
+            return table
+        except Exception as e:
+            logger.error("Failed to parse CSV table at %s: %s", csv_path, e)
+            return None
 
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
+    def scan_dataset(self) -> List[ChartDatasetItem]:
+        """Scans image and table directories, pairing chart images with gold CSV files.
 
-        meta = data.get("metadata", {})
-        table = TableSchema.from_dict(data)
+        Returns:
+            List[ChartDatasetItem]: List of paired dataset items.
+        """
+        self._items = []
 
-        item = ChartDatasetItem(
-            id=meta.get("image_id", "sanity_001"),
-            question=meta.get("question", "What is shown in the table?"),
-            answer=meta.get("ground_truth_answer", "N/A"),
-            table=table,
-            image_path=path.parent / meta.get("image_id", "mock_chart.png"),
-            metadata=meta,
+        if not self.images_dir.exists():
+            logger.warning("Images directory does not exist: %s. Returning empty dataset.", self.images_dir)
+            return []
+
+        image_files = sorted(
+            list(self.images_dir.glob("*.png"))
+            + list(self.images_dir.glob("*.jpg"))
+            + list(self.images_dir.glob("*.jpeg"))
         )
-        self._samples = [item]
-        return self._samples
 
-    def load_dataset(self) -> List[ChartDatasetItem]:
-        """Loads dataset items from raw directory stub or falls back to sanity data.
+        for img_path in image_files:
+            sample_id = img_path.stem
+            expected_csv = self.tables_dir / f"{sample_id}.csv"
 
-        Returns:
-            List[ChartDatasetItem]: Loaded dataset items.
-        """
-        raw_split_dir = self.data_dir / "raw" / self.dataset_name.lower() / self.split
-        if not raw_split_dir.exists():
-            # In skeleton/stub mode, gracefully fallback to sanity data
-            return self.load_sanity_data()
+            table = None
+            if expected_csv.exists():
+                table = self.load_table_from_csv(expected_csv)
+            else:
+                logger.warning("Sample %s has missing gold CSV at: %s", sample_id, expected_csv)
 
-        # Placeholder for full ChartQA/PlotQA json parsing logic
-        # Typically annotations are stored as json files:
-        # e.g. test_augmented.json, test_human.json
-        items: List[ChartDatasetItem] = []
-        return items
+            item = ChartDatasetItem(
+                id=sample_id,
+                image_path=img_path,
+                csv_path=expected_csv if expected_csv.exists() else None,
+                table=table,
+                metadata={"split": self.split, "source": "real_dataset"},
+            )
+            self._items.append(item)
+
+        logger.info("Scanned %d paired dataset items from %s", len(self._items), self.split_dir)
+        return self._items
 
     def __len__(self) -> int:
-        return len(self._samples)
+        return len(self._items)
 
     def __iter__(self) -> Iterator[ChartDatasetItem]:
-        return iter(self._samples)
+        return iter(self._items)
