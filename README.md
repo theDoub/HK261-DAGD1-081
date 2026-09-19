@@ -1,169 +1,111 @@
-# Chart-to-Table $\rightarrow$ Table QA: Two-Stage Multimodal Pipeline
+# Chart-to-Table: Modular Pipeline Architecture (Modules B1–B6)
 
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.1%2B-EE4C2C.svg)](https://pytorch.org/)
-[![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97%20HuggingFace-DePlot-FFD21E.svg)](https://huggingface.co/google/deplot)
+[![Pydantic v2](https://img.shields.io/badge/Pydantic-v2-E92063.svg)](https://docs.pydantic.dev/)
 
-An academic, modular framework for evaluating two-stage multimodal Chart Question Answering (ChartQA / PlotQA). Rather than relying on monolithic end-to-end Vision-Language Models (VLMs) that often suffer from numerical hallucination on complex data visualizations, this repository structures the task into two decoupled, interpretable stages:
-1. **Stage 1 (Chart-to-Table):** Translating visual charts into structured tabular representations using visual document models (e.g., Google's [DePlot](https://huggingface.co/google/deplot) / Pix2Struct).
-2. **Stage 2 (Table QA):** Answering natural language questions conditioned on the extracted table using language reasoning models (VLMs / LLMs).
+A clean, modular repository implementing **Stage 1 (Chart-to-Table)** extraction, canonical table modeling, and evaluation metrics across Modules B1 to B6.
 
 ---
 
-## Architecture Pipeline
+## Architecture & Module Boundaries (B1–B6)
 
 ```mermaid
-flowchart LR
-    subgraph S1["Stage 1: Visual Table Extraction"]
-        A["Input Chart Image (PNG/JPG)"] --> B["DePlot Harness (Pix2Struct)"]
-        B --> C["Linearized Sequence / Pipe Format"]
-        C --> D["TableSchema Parser (Module B1)"]
+flowchart TD
+    subgraph DataIngestion["Data Layer"]
+        B3["Module B3: Synthetic Sanity Set\n(data/sanity/synthetic_dataset.json)"]
+        B4["Module B4: Real Data Loader\n(ChartQA/PlotQA CSV pairing)"]
     end
 
-    subgraph S2["Stage 2: Tabular Reasoning & QA"]
-        D --> E["Prompt Builder (Markdown Table + Question)"]
-        Q["User Question"] --> E
-        E --> F["VLM / LLM Reasoning Client (Module B5)"]
-        F --> G["Predicted Answer"]
+    subgraph Extraction["Module B5: VLM Extraction Harness"]
+        BH["Pluggable Backends:\n- MockBackend\n- OpenVLMBackend\n- APIVLMBackend"]
+        PR["Prompt Formatter (Markdown / Linearized)"]
+        EH["Failure Isolation & Raw Text Logger"]
     end
 
-    subgraph EV["Evaluation Harness (Module B6)"]
-        D -.-> M1["Table Metrics: RMS-F1 / RNSS (Module B2)"]
-        GT_T["Ground Truth Table"] -.-> M1
-        G -.-> M2["QA Metrics: Exact Match / Relaxed Acc (Module B2)"]
-        GT_A["Ground Truth Answer"] -.-> M2
+    subgraph Representation["Module B1: Table Representation & Parser"]
+        TS["TableSchema & TableTriplet (row, col, value)"]
+        NORM["Normalization:\n- Headers (lowercase, collapse ws)\n- Values (strip $, %, commas, parse num)"]
+        PARS["Parsers (Markdown, CSV, DePlot Linearized)"]
     end
+
+    subgraph Evaluation["Module B6: Evaluator & Error Analysis"]
+        B2["Module B2: Metrics\n- RMS-F1 (Hungarian matching)\n- RNSS (Structural numerical similarity)\n- Value-Recall@5%"]
+        AGG["Breakdown by Chart Type & Complexity"]
+        ERR["Error Buckets:\n- numeric_error\n- header_mismatch\n- missing_data\n- structural_error"]
+    end
+
+    DataIngestion --> Extraction
+    Extraction --> Representation
+    Representation --> Evaluation
 ```
+
+---
+
+## Module Breakdown
+
+| Module | Location | Responsibilities & Implementations |
+|---|---|---|
+| **B1** | `src/format/` | **Table Representation & Parsers**: `TableTriplet` (row, col, value) and `TableSchema`. Header normalization (lowercase, collapse whitespace), cell value normalization (currency/comma/percent stripping and numeric coercion), markdown codeblock stripping, and parsers for Markdown, CSV, and Linearized DePlot formats. |
+| **B2** | `src/metrics/` | **Metrics**: Mathematical formulations for `RMS-F1` (Normalized Levenshtein header matching with threshold $\tau = 0.5$, relative value distance $D = \min(1, |p - t| / |t|)$, Hungarian matching assignment via `scipy.optimize.linear_sum_assignment`), `RNSS` (structural numerical similarity), and `Value-Recall@5%`. |
+| **B3** | `data/sanity/`, `src/data_loader/synthetic.py` | **Synthetic Sanity Set**: 6 diverse mock chart metadata and ground-truth tables (bar, line, grouped bar, horizontal bar, mixed complexity). |
+| **B4** | `src/data_loader/loader.py` | **Real Data Loader**: Ingestion layer pairing image paths with gold CSV files (ChartQA / PlotQA format), converting CSV into Module B1 canonical tables with missing-file error logging. |
+| **B5** | `src/models/harness.py` | **VLM Extraction Harness**: Pluggable backend architecture (`MockBackend`, `OpenVLMBackend`, `APIVLMBackend`), extraction prompt formatter, and isolated execution saving raw text and recording `parse_ok`. |
+| **B6** | `src/evaluation/evaluator.py` | **Evaluation & Error Analysis**: Evaluates extraction against gold tables, computes aggregations broken down by chart type and complexity, and categorizes failures into actionable error buckets (`numeric_error`, `header_mismatch`, `missing_data`, `structural_error`). |
 
 ---
 
 ## Directory Layout
 
 ```
-.
+chart-to-table/
 ├── configs/
-│   └── config.yaml              # Declarative experiment and model configurations
+│   └── config.yaml              # Declarative experiment configuration
 ├── data/
 │   ├── raw/                     # Benchmark datasets (ChartQA, PlotQA)
-│   └── sanity/                  # Minimal fixtures for offline smoke testing & CI
-│       └── sample_table.json    # Sample table and QA fixture
+│   └── sanity/
+│       ├── sample_table.json    # Single sample fixture
+│       └── synthetic_dataset.json # Module B3: 6 synthetic chart fixtures
 ├── src/
-│   ├── format/                  # [Module B1] Common table schema and serialization
+│   ├── format/                  # [Module B1] Table representations & parsers
 │   │   ├── __init__.py
-│   │   └── schema.py            # TableSchema (Pydantic / dataclass, Markdown, DataFrame)
+│   │   ├── parser.py            # Normalizers, codeblock strippers, format parsers
+│   │   └── schema.py            # TableTriplet, TableSchema
 │   ├── metrics/                 # [Module B2] Evaluation metrics
 │   │   ├── __init__.py
-│   │   └── table_metrics.py     # RMS-F1, RNSS, Relaxed QA Accuracy
-│   ├── data_loader/             # [Module B4] Dataset ingestion stubs
+│   │   └── table_metrics.py     # RMS-F1 (Hungarian), RNSS, Value-Recall@5%
+│   ├── data_loader/             # [Modules B3 & B4] Data ingestion
 │   │   ├── __init__.py
-│   │   └── loader.py            # ChartDataLoader, ChartDatasetItem
-│   ├── models/                  # [Module B5] Inference harnesses
+│   │   ├── loader.py            # Real ChartQA/PlotQA loader
+│   │   └── synthetic.py         # Synthetic benchmark loader
+│   ├── models/                  # [Module B5] Extraction harnesses
 │   │   ├── __init__.py
-│   │   ├── deplot.py            # Google DePlot (Pix2Struct) visual table extractor
-│   │   └── vlm_client.py        # VLM/LLM tabular reasoning client
-│   └── evaluation/              # [Module B6] Evaluation orchestration
+│   │   ├── deplot.py            # Minimal DePlot stub
+│   │   └── harness.py           # Pluggable VLMTableHarness (Mock, Open, API)
+│   └── evaluation/              # [Module B6] Evaluation & error analysis
 │       ├── __init__.py
-│       └── evaluator.py         # End-to-end two-stage PipelineEvaluator
+│       └── evaluator.py         # PipelineEvaluator & categorize_error
 ├── tests/
 │   ├── __init__.py
-│   └── test_pipeline.py         # Pytest unit tests for all modules
-├── .gitignore                   # Ignores caches, checkpoints, raw data, IDE files
-├── requirements.txt             # Core dependencies
-├── main.py                      # Runnable sanity demonstration entry script
+│   └── test_pipeline.py         # 10 unit tests covering Modules B1 to B6
+├── .gitignore
+├── requirements.txt             # Lightweight dependencies
+├── main.py                      # End-to-end smoke test script
 └── README.md                    # Project documentation
 ```
 
 ---
 
-## Module Boundaries (B1 – B6)
+## Execution & Verification
 
-Each component has clear interfaces and strict functional boundaries:
-
-| Module | Subpackage | Key Class / Functions | Responsibility |
-|---|---|---|---|
-| **B1** | `src.format` | `TableSchema` | Canonical data structure for extracted and ground-truth tables. Handles shape validation, dictionary export, pandas `DataFrame` conversion, Markdown rendering, and DePlot linearized text round-trips. |
-| **B2** | `src.metrics` | `compute_rms_f1`, `compute_rnss`, `compute_relaxed_accuracy`, `compute_qa_accuracy` | Mathematical metrics evaluating: (1) cell-level numerical extraction accuracy ($\text{RMS-F1}$ within 5% tolerance), (2) matrix structural similarity ($\text{RNSS}$), and (3) QA prediction fidelity. |
-| **B4** | `src.data_loader` | `ChartDataLoader`, `ChartDatasetItem` | Ingestion layer abstracting ChartQA, PlotQA, and local sanity datasets. Delivers standard sample objects containing chart paths, questions, and ground-truth tables. |
-| **B5** | `src.models` | `DePlotHarness`, `VLMClient` | Stage 1 inference wrapper around `google/deplot` (Pix2Struct) and Stage 2 reasoning harness querying LLMs/VLMs with structured table contexts. |
-| **B6** | `src.evaluation`| `PipelineEvaluator` | Pipeline orchestrator executing both stages per sample, computing cell extraction metrics and QA metrics, and aggregating benchmark summaries. |
-
----
-
-## Metric Definitions
-
-### 1. RMS-F1 (Relative Mean Squared Error F1)
-Measures cell-level numerical extraction fidelity. A predicted numerical cell $\hat{y}$ is counted as a **True Positive** ($TP$) against ground truth $y$ if:
-$$\frac{|\hat{y} - y|}{\max(|y|, \epsilon)} \le \tau \quad (\text{typically } \tau = 0.05 \text{ or } 5\%)$$
-From which standard cell precision, recall, and harmonic mean $F_1$ are computed.
-
-### 2. RNSS (Relative Numerical Structural Similarity)
-Blends cell numerical precision ($F_1$) with column alignment Jaccard similarity:
-$$\text{RNSS} = \frac{1}{2} F_1 + \frac{1}{2} \mathcal{J}(\text{Cols}_{\text{pred}}, \text{Cols}_{\text{gt}})$$
-
-### 3. Relaxed Accuracy (ChartQA Standard)
-For numerical targets, predictions within $5\%$ relative error are scored as correct ($1.0$). Non-numerical targets are evaluated via normalized exact string match.
-
----
-
-## Environment Setup
-
-### 1. Prerequisites
-- Python 3.10+
-- Recommended: CUDA 11.8+ / 12.0+ for GPU-accelerated DePlot inference.
-
-### 2. Virtual Environment Creation
-```bash
-# Clone or navigate to the repository
-cd chart-to-table
-
-# Create virtual environment
-python -m venv .venv
-
-# Activate virtual environment
-# Windows (PowerShell):
-.venv\Scripts\Activate.ps1
-# Linux / macOS:
-# source .venv/bin/activate
-```
-
-### 3. Install Dependencies
-```bash
-pip install --upgrade pip
-pip install -r requirements.txt
-```
-
----
-
-## Run Instructions
-
-### 1. Sanity Check Run
-To test the entire pipeline end-to-end using local mock fixtures without downloading multi-gigabyte model weights:
+### 1. Run Smoke Test
 ```bash
 python main.py
 ```
-**Expected Output:**
-- Loads `data/sanity/sample_table.json`.
-- Validates `TableSchema` dimensions and structure.
-- Displays Markdown table, converted pandas DataFrame, and linearized text.
-- Executes `PipelineEvaluator` and prints an evaluation summary JSON.
+Executes an end-to-end smoke run: loads Module B3 synthetic data, extracts via Module B5 MockBackend, parses via Module B1, evaluates with Module B2 metrics, and produces Module B6 breakdowns by chart type, complexity, and error categories.
 
 ### 2. Run Test Suite
-Run the automated unit tests across all modules:
 ```bash
-python -m pytest tests/ -v
+pytest tests/ -v
 ```
-
-### 3. Configuration Customization
-Adjust pipeline hyperparameters in `configs/config.yaml`:
-```yaml
-deplot:
-  model_name_or_path: "google/deplot"
-  device: "cuda"  # Switch between "cuda" and "cpu"
-  max_new_tokens: 512
-
-table_qa:
-  model_provider: "vlm_stub"  # "openai", "vlm_stub", "huggingface"
-  model_name: "gpt-4o-mini"
-  temperature: 0.0
-```
+All 10 unit tests pass across parsers, normalization rules, metric calculations, synthetic datasets, and evaluator error categorization.
