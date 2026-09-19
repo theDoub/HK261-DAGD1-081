@@ -1,15 +1,15 @@
-"""Module B2: Evaluation metrics for table extraction and table QA."""
+"""Module B2: Evaluation metrics for table extraction."""
 
 from src.metrics.table_metrics import (
-    compute_qa_accuracy,
-    compute_relaxed_accuracy,
     compute_rms_f1,
     compute_rnss,
+    compute_value_recall_at_5,
+    normalized_levenshtein,
 )
 
 __all__ = [
     "compute_rms_f1",
     "compute_rnss",
-    "compute_qa_accuracy",
-    "compute_relaxed_accuracy",
+    "compute_value_recall_at_5",
+    "normalized_levenshtein",
 ]

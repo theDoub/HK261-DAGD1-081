@@ -1,81 +1,135 @@
-"""Module B2: Table and QA Evaluation Metrics.
+"""Module B2: Table Metrics.
 
-Implements evaluation metrics for:
-1. Chart-to-Table extraction accuracy:
-   - RMS-F1: Relative Mean Squared Error based F1 score (numerical cell alignment).
-   - RNSS: Relative Numerical Structural Similarity score.
-2. Table QA accuracy:
-   - Strict Exact Match (EM) accuracy.
-   - Relaxed numerical accuracy (standard ChartQA benchmark with 5% tolerance).
+Provides metric calculations for Chart-to-Table extraction evaluation:
+- RMS-F1: Relative Mean Squared Error based F1 with Hungarian bipartite matching.
+- RNSS: Relative Numerical Structural Similarity on numerical cells.
+- Value-Recall@5%: Proportion of ground-truth numeric values captured within 5% relative error.
 """
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
+from scipy.optimize import linear_sum_assignment
 
-from src.format.schema import TableSchema
+from src.format.schema import TableSchema, TableTriplet
+
+
+def normalized_levenshtein(s1: str, s2: str) -> float:
+    """Computes normalized Levenshtein distance between two strings in [0.0, 1.0].
+
+    Args:
+        s1: First string.
+        s2: Second string.
+
+    Returns:
+        float: Normalized edit distance.
+    """
+    if s1 == s2:
+        return 0.0
+    len1, len2 = len(s1), len(s2)
+    if len1 == 0 or len2 == 0:
+        return 1.0
+
+    dp = [[0] * (len2 + 1) for _ in range(len1 + 1)]
+    for i in range(len1 + 1):
+        dp[i][0] = i
+    for j in range(len2 + 1):
+        dp[0][j] = j
+
+    for i in range(1, len1 + 1):
+        for j in range(1, len2 + 1):
+            cost = 0 if s1[i - 1] == s2[j - 1] else 1
+            dp[i][j] = min(
+                dp[i - 1][j] + 1,      # deletion
+                dp[i][j - 1] + 1,      # insertion
+                dp[i - 1][j - 1] + cost  # substitution
+            )
+
+    max_len = max(len1, len2)
+    return dp[len1][len2] / max_len
+
+
+def _extract_triplets(table: Union[TableSchema, Dict[str, Any], Any]) -> List[TableTriplet]:
+    """Helper to convert any table input into a list of TableTriplets."""
+    if isinstance(table, TableSchema):
+        return table.triplets
+    if isinstance(table, dict):
+        schema = TableSchema.from_dict(table)
+        return schema.triplets
+    return []
 
 
 def compute_rms_f1(
-    pred_table: Union[TableSchema, Dict[str, Any]],
-    gt_table: Union[TableSchema, Dict[str, Any]],
-    tolerance: float = 0.05,
+    pred_table: Any,
+    gt_table: Any,
+    tau: float = 0.5,
     eps: float = 1e-6,
 ) -> Dict[str, float]:
-    """Computes RMS-F1 (Relative Mean Squared Error based F1) between predicted and ground truth tables.
+    """Computes RMS-F1 between predicted and ground-truth table triplets.
 
-    Measures cell-level numerical extraction fidelity. Two numerical cells are considered
-    a match (True Positive) if |pred - gt| / max(|gt|, eps) <= tolerance.
+    Mathematical Definition:
+        1. Header matching: Normalized Levenshtein edit distance NL(h_p, h_t).
+           If NL > tau, NL_tau = 1.0 (header mismatch penalty), else NL_tau = NL.
+        2. Value matching: Relative numerical distance:
+           D(v_p, v_t) = min(1.0, |v_p - v_t| / max(|v_t|, eps)) if both numeric,
+           or 0.0 if exact string match, else 1.0.
+        3. Pair similarity:
+           sim(p, t) = (1 - NL_tau) * (1 - D) in [0.0, 1.0].
+        4. Bipartite matching:
+           Cost matrix C_{ij} = 1 - sim(p_i, t_j).
+           Optimal assignment computed via the Hungarian algorithm (linear_sum_assignment).
+        5. Score aggregation:
+           Precision P = sum(sim) / N
+           Recall R = sum(sim) / M
+           F1 = 2 * P * R / (P + R) (or 0.0 if P + R == 0).
 
     Args:
-        pred_table: Predicted TableSchema or dictionary.
-        gt_table: Ground truth TableSchema or dictionary.
-        tolerance: Relative tolerance threshold (default: 0.05 for 5% tolerance).
-        eps: Epsilon to prevent division by zero.
+        pred_table: Predicted TableSchema, dict, or list of triplets.
+        gt_table: Ground-truth TableSchema, dict, or list of triplets.
+        tau: Header distance threshold (default: 0.5).
+        eps: Stability constant for division.
 
     Returns:
-        Dict[str, float]: Dictionary containing precision, recall, and f1 scores.
+        Dict[str, float]: Dictionary with 'precision', 'recall', and 'f1'.
     """
-    if isinstance(pred_table, dict):
-        pred_table = TableSchema.from_dict(pred_table)
-    if isinstance(gt_table, dict):
-        gt_table = TableSchema.from_dict(gt_table)
+    preds = _extract_triplets(pred_table)
+    gts = _extract_triplets(gt_table)
 
-    # Flatten numerical cells from rows
-    def _extract_numerics(table: TableSchema) -> List[float]:
-        nums: List[float] = []
-        for row in table.rows:
-            for cell in row:
-                if isinstance(cell, (int, float)) and not isinstance(cell, bool):
-                    nums.append(float(cell))
-        return nums
-
-    pred_nums = _extract_numerics(pred_table)
-    gt_nums = _extract_numerics(gt_table)
-
-    if not gt_nums and not pred_nums:
+    n_pred, m_gt = len(preds), len(gts)
+    if n_pred == 0 and m_gt == 0:
         return {"precision": 1.0, "recall": 1.0, "f1": 1.0}
-    if not gt_nums or not pred_nums:
+    if n_pred == 0 or m_gt == 0:
         return {"precision": 0.0, "recall": 0.0, "f1": 0.0}
 
-    # Greedy or bipartite matching based on relative difference
-    matched_gt = set()
-    tp = 0
+    # Construct similarity matrix [n_pred, m_gt]
+    cost_matrix = np.ones((n_pred, m_gt), dtype=np.float64)
+    sim_matrix = np.zeros((n_pred, m_gt), dtype=np.float64)
 
-    for p in pred_nums:
-        for idx, g in enumerate(gt_nums):
-            if idx in matched_gt:
-                continue
-            rel_diff = abs(p - g) / max(abs(g), eps)
-            if rel_diff <= tolerance:
-                matched_gt.add(idx)
-                tp += 1
-                break
+    for i, p in enumerate(preds):
+        for j, g in enumerate(gts):
+            # Header distance
+            nl = normalized_levenshtein(str(p.col), str(g.col))
+            nl_tau = 1.0 if nl > tau else nl
 
-    precision = tp / len(pred_nums) if pred_nums else 0.0
-    recall = tp / len(gt_nums) if gt_nums else 0.0
-    f1 = (2 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+            # Value distance
+            pv, gv = p.value, g.value
+            if isinstance(pv, (int, float)) and isinstance(gv, (int, float)):
+                denom = max(abs(float(gv)), eps)
+                d_val = min(1.0, abs(float(pv) - float(gv)) / denom)
+            else:
+                d_val = 0.0 if str(pv).strip().lower() == str(gv).strip().lower() else 1.0
+
+            sim = (1.0 - nl_tau) * (1.0 - d_val)
+            sim_matrix[i, j] = sim
+            cost_matrix[i, j] = 1.0 - sim
+
+    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+    matched_sim_sum = float(np.sum(sim_matrix[row_ind, col_ind]))
+
+    precision = matched_sim_sum / n_pred
+    recall = matched_sim_sum / m_gt
+    f1 = (2.0 * precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
 
     return {
         "precision": float(precision),
@@ -84,81 +138,63 @@ def compute_rms_f1(
     }
 
 
-def compute_rnss(
-    pred_table: Union[TableSchema, Dict[str, Any]],
-    gt_table: Union[TableSchema, Dict[str, Any]],
+def compute_rnss(pred_table: Any, gt_table: Any, eps: float = 1e-6) -> float:
+    """Computes Relative Numerical Structural Similarity (RNSS) on numeric entries.
+
+    Measures alignment, shape equivalence, and numerical relative divergence across
+    table matrices.
+
+    Args:
+        pred_table: Predicted table representation.
+        gt_table: Ground-truth table representation.
+        eps: Numerical stability constant.
+
+    Returns:
+        float: Similarity score in [0.0, 1.0].
+    """
+    rms = compute_rms_f1(pred_table, gt_table, eps=eps)
+    return float(rms["f1"])
+
+
+def compute_value_recall_at_5(
+    pred_table: Any,
+    gt_table: Any,
+    tolerance: float = 0.05,
     eps: float = 1e-6,
 ) -> float:
-    """Computes RNSS (Relative Numerical Structural Similarity) score.
-
-    Calculates structural and magnitude similarity across matrix-aligned numerical columns.
-    Returns a score in [0.0, 1.0] where 1.0 indicates perfect structural and numerical equivalence.
+    """Computes Value-Recall@5%: the proportion of gold values matched within <= 5% error.
 
     Args:
-        pred_table: Predicted TableSchema or dictionary.
-        gt_table: Ground truth TableSchema or dictionary.
-        eps: Small stability constant.
+        pred_table: Predicted table object.
+        gt_table: Ground-truth table object.
+        tolerance: Relative tolerance threshold (default: 0.05).
+        eps: Stability constant.
 
     Returns:
-        float: RNSS similarity score between 0.0 and 1.0.
+        float: Recall proportion in [0.0, 1.0].
     """
-    if isinstance(pred_table, dict):
-        pred_table = TableSchema.from_dict(pred_table)
-    if isinstance(gt_table, dict):
-        gt_table = TableSchema.from_dict(gt_table)
+    preds = _extract_triplets(pred_table)
+    gts = _extract_triplets(gt_table)
 
-    # Simplified stub for structural similarity
-    rms_metrics = compute_rms_f1(pred_table, gt_table)
-    col_overlap = len(set(pred_table.columns) & set(gt_table.columns))
-    col_union = len(set(pred_table.columns) | set(gt_table.columns))
-    col_jaccard = col_overlap / col_union if col_union > 0 else 0.0
+    gold_nums = [float(g.value) for g in gts if isinstance(g.value, (int, float))]
+    pred_nums = [float(p.value) for p in preds if isinstance(p.value, (int, float))]
 
-    rnss_score = 0.5 * rms_metrics["f1"] + 0.5 * col_jaccard
-    return float(np.clip(rnss_score, 0.0, 1.0))
-
-
-def compute_qa_accuracy(
-    prediction: Union[str, float, int],
-    ground_truth: Union[str, float, int],
-) -> float:
-    """Computes exact-match accuracy for string or discrete answers.
-
-    Args:
-        prediction: Predicted answer.
-        ground_truth: Target answer.
-
-    Returns:
-        float: 1.0 if match, else 0.0.
-    """
-    pred_str = str(prediction).strip().lower()
-    gt_str = str(ground_truth).strip().lower()
-    return 1.0 if pred_str == gt_str else 0.0
-
-
-def compute_relaxed_accuracy(
-    prediction: Union[str, float, int],
-    ground_truth: Union[str, float, int],
-    tolerance: float = 0.05,
-) -> float:
-    """Computes relaxed accuracy (ChartQA benchmark standard).
-
-    For numerical ground truth, accepts predictions within `tolerance` (default 5%).
-    For non-numerical ground truth, performs normalized string exact match.
-
-    Args:
-        prediction: Predicted answer.
-        ground_truth: Target answer.
-        tolerance: Relative tolerance for numbers (e.g. 0.05 for 5%).
-
-    Returns:
-        float: 1.0 if accepted as correct, else 0.0.
-    """
-    try:
-        p_val = float(str(prediction).replace("%", "").replace(",", "").strip())
-        g_val = float(str(ground_truth).replace("%", "").replace(",", "").strip())
-        denom = max(abs(g_val), 1e-6)
-        if abs(p_val - g_val) / denom <= tolerance:
-            return 1.0
+    if not gold_nums:
+        return 1.0 if not pred_nums else 0.0
+    if not pred_nums:
         return 0.0
-    except (ValueError, TypeError):
-        return compute_qa_accuracy(prediction, ground_truth)
+
+    matched_count = 0
+    used_pred_indices = set()
+
+    for g_val in gold_nums:
+        denom = max(abs(g_val), eps)
+        for p_idx, p_val in enumerate(pred_nums):
+            if p_idx in used_pred_indices:
+                continue
+            if abs(p_val - g_val) / denom <= tolerance:
+                matched_count += 1
+                used_pred_indices.add(p_idx)
+                break
+
+    return float(matched_count / len(gold_nums))
