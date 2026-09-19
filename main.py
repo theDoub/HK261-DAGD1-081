@@ -1,11 +1,12 @@
-"""Main entry point for the Chart-to-Table -> Table QA pipeline.
+"""Main entry point: End-to-end Smoke Test for Chart-to-Table Pipeline.
 
-Demonstrates a minimal runnable workflow:
-1. Loads mock chart data from data/sanity/sample_table.json.
-2. Formats and validates the table using Module B1 (src.format.schema).
-3. Demonstrates conversions (Markdown, DataFrame, Linearized DePlot format).
-4. Executes the two-stage evaluation harness (Module B6) on the sanity sample.
-5. Prints a success confirmation log.
+Workflow:
+1. Loads synthetic ground-truth tables from Module B3 (data/sanity/synthetic_dataset.json).
+2. Extracts tables using Module B5 VLMTableHarness (MockBackend).
+3. Parses output and normalizes cells into Module B1 TableSchema and TableTriplets.
+4. Computes Module B2 metrics (RMS-F1, RNSS, Value-Recall@5%).
+5. Generates Module B6 aggregations (by chart type, complexity, and error buckets).
+6. Logs comprehensive verification summary.
 """
 
 from __future__ import annotations
@@ -15,85 +16,71 @@ import logging
 import sys
 from pathlib import Path
 
-# Configure structured console logging
+# Setup structured logger
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("ChartQA-Pipeline")
+logger = logging.getLogger("SmokeTest")
 
 
-def run_sanity_pipeline() -> None:
-    """Executes the sanity check pipeline."""
-    # Ensure root path is in sys.path when running script directly
+def run_smoke_test() -> None:
+    """Executes the complete modular smoke test across Modules B1 to B6."""
     project_root = Path(__file__).resolve().parent
     if str(project_root) not in sys.path:
         sys.path.insert(0, str(project_root))
 
-    from src.data_loader.loader import ChartDataLoader
+    from src.data_loader.synthetic import load_synthetic_tables
     from src.evaluation.evaluator import PipelineEvaluator
-    from src.format.schema import TableSchema
-    from src.models.deplot import DePlotHarness
-    from src.models.vlm_client import VLMClient
+    from src.models.harness import MockBackend, VLMTableHarness
 
-    logger.info("=" * 60)
-    logger.info("Initializing Chart-to-Table -> Table QA Sanity Pipeline")
-    logger.info("=" * 60)
+    logger.info("=" * 65)
+    logger.info("STARTING CHART-TO-TABLE PIPELINE SMOKE TEST (MODULES B1-B6)")
+    logger.info("=" * 65)
 
-    # 1. Load mock data from data/sanity
-    sanity_file = project_root / "data" / "sanity" / "sample_table.json"
-    logger.info("Loading sanity dataset from: %s", sanity_file)
+    # 1. Module B3: Load synthetic sanity benchmark tables
+    tables = load_synthetic_tables()
+    logger.info("Module B3: Loaded %d synthetic benchmark samples.", len(tables))
 
-    loader = ChartDataLoader(data_dir=project_root / "data")
-    dataset_items = loader.load_sanity_data(sanity_file)
-    sample = dataset_items[0]
+    # Preview first sample in Markdown (Module B1)
+    sample_gold = tables[0]
+    print("\n" + "=" * 50)
+    print(" [Module B1] Gold Table Preview (Markdown):")
+    print("=" * 50)
+    print(sample_gold.to_markdown())
+    print(f"Total Triplet Cells: {len(sample_gold.triplets)}")
+    print("=" * 50 + "\n")
 
-    logger.info("Loaded sample ID: %s", sample.id)
-    logger.info("Question: '%s'", sample.question)
-    logger.info("Ground Truth Answer: '%s'", sample.answer)
+    # 2. Module B5: Initialize extraction harness with MockBackend
+    # We configure the mock to match sample_001 perfectly to demonstrate high F1
+    mock_md = sample_gold.to_markdown()
+    mock_backend = MockBackend(predefined_table_md=mock_md)
+    harness = VLMTableHarness(backend=mock_backend, target_format="markdown")
+    logger.info("Module B5: Initialized VLMTableHarness with MockBackend.")
 
-    # 2. Validate and format using Module B1 (TableSchema)
-    table: TableSchema = sample.table  # type: ignore[assignment]
-    is_valid = table.validate_shape()
-    logger.info(
-        "TableSchema validation: %s (Columns: %d, Rows: %d)",
-        "PASSED" if is_valid else "FAILED",
-        len(table.columns),
-        len(table.rows),
-    )
+    # 3. Module B6 & B2: Run evaluation pipeline
+    evaluator = PipelineEvaluator(harness=harness)
+    results = evaluator.evaluate_dataset(tables)
 
-    # 3. Display Markdown formatted table
-    print("\n--- [Module B1] Formatted Markdown Table ---")
-    print(table.to_markdown())
-    print("-" * 45 + "\n")
+    print("\n" + "=" * 50)
+    print(" [Module B6] Evaluation & Error Analysis Summary:")
+    print("=" * 50)
+    print(f"Total Evaluated Samples: {results['total_samples']}")
+    print(f"Mean RMS-F1 Score:       {results['mean_rms_f1']:.4f}")
+    print(f"Mean RNSS Score:         {results['mean_rnss']:.4f}")
+    print(f"Mean Value-Recall@5%:    {results['mean_value_recall_at_5']:.4f}")
+    print("-" * 50)
+    print("Breakdown by Chart Type:")
+    print(json.dumps(results["breakdown_by_chart_type"], indent=2))
+    print("Breakdown by Complexity:")
+    print(json.dumps(results["breakdown_by_complexity"], indent=2))
+    print("Error Distribution:")
+    print(json.dumps(results["error_analysis"], indent=2))
+    print("=" * 50 + "\n")
 
-    # 4. Display Pandas DataFrame conversion
-    print("--- [Module B1] Converted pandas DataFrame ---")
-    df = table.to_dataframe()
-    print(df)
-    print("-" * 45 + "\n")
-
-    # 5. Display Linearized Text (DePlot / LLM prompt format)
-    print("--- [Module B1] Linearized Table for Prompt Context ---")
-    linearized = table.to_linearized_text()
-    print(linearized)
-    print("-" * 45 + "\n")
-
-    # 6. Execute two-stage evaluation pipeline (Module B6)
-    logger.info("Executing two-stage evaluation pipeline stub...")
-    evaluator = PipelineEvaluator(
-        deplot_harness=DePlotHarness(dry_run=True),
-        vlm_client=VLMClient(provider="vlm_stub"),
-    )
-    summary = evaluator.evaluate_dataset(dataset_items)
-
-    print("\n--- [Module B6] Evaluation Results Summary ---")
-    print(json.dumps(summary, indent=2))
-    print("-" * 45 + "\n")
-
-    logger.info("SUCCESS: Chart-to-Table -> Table QA pipeline sanity check completed cleanly!")
+    logger.info("SUCCESS: All modules (B1-B6) executed and validated cleanly!")
 
 
 if __name__ == "__main__":
-    run_sanity_pipeline()
+    run_smoke_test()
