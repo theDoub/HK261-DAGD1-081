@@ -1,0 +1,112 @@
+[
+  {
+    "id": "synthetic_001_bar_simple",
+    "title": "Quarterly Unit Sales",
+    "chart_type": "bar",
+    "complexity": "simple",
+    "columns": ["Quarter", "Sales"],
+    "rows": [
+      ["Q1", 120],
+      ["Q2", 150],
+      ["Q3", 180]
+    ],
+    "metadata": {
+      "categories": 3,
+      "series": 1,
+      "unit": "Units"
+    }
+  },
+  {
+    "id": "synthetic_002_bar_grouped",
+    "title": "Branch Revenue by Product",
+    "chart_type": "grouped_bar",
+    "complexity": "medium",
+    "columns": ["Product", "Branch North", "Branch South"],
+    "rows": [
+      ["Laptops", 450.5, 380.0],
+      ["Phones", 620.0, 590.2],
+      ["Tablets", 210.3, 245.8],
+      ["Accessories", 95.0, 110.4]
+    ],
+    "metadata": {
+      "categories": 4,
+      "series": 2,
+      "unit": "Thousand USD"
+    }
+  },
+  {
+    "id": "synthetic_003_line_simple",
+    "title": "Monthly Temperature Trend",
+    "chart_type": "line",
+    "complexity": "simple",
+    "columns": ["Month", "Average Temperature"],
+    "rows": [
+      ["Jan", 15.2],
+      ["Feb", 16.8],
+      ["Mar", 20.1],
+      ["Apr", 24.5],
+      ["May", 28.0]
+    ],
+    "metadata": {
+      "categories": 5,
+      "series": 1,
+      "unit": "Celsius"
+    }
+  },
+  {
+    "id": "synthetic_004_line_multi",
+    "title": "Annual GDP Growth Comparison",
+    "chart_type": "line",
+    "complexity": "medium",
+    "columns": ["Year", "Country A", "Country B", "Country C"],
+    "rows": [
+      ["2020", -2.5, 1.2, -1.8],
+      ["2021", 5.8, 4.2, 3.9],
+      ["2022", 3.1, 2.8, 2.5],
+      ["2023", 2.4, 2.1, 2.0]
+    ],
+    "metadata": {
+      "categories": 4,
+      "series": 3,
+      "unit": "Percent"
+    }
+  },
+  {
+    "id": "synthetic_005_bar_complex",
+    "title": "Renewable Energy Capacity by Region",
+    "chart_type": "horizontal_bar",
+    "complexity": "complex",
+    "columns": ["Region", "Solar", "Wind", "Hydro"],
+    "rows": [
+      ["East Asia", 320.4, 280.1, 190.5],
+      ["Europe", 210.0, 260.5, 150.2],
+      ["North America", 195.8, 220.4, 180.0],
+      ["Latin America", 85.2, 90.0, 210.6],
+      ["South Asia", 95.0, 75.3, 60.1],
+      ["Africa", 45.1, 38.2, 55.4]
+    ],
+    "metadata": {
+      "categories": 6,
+      "series": 3,
+      "unit": "GW"
+    }
+  },
+  {
+    "id": "synthetic_006_grouped_complex",
+    "title": "Profit Margin vs Operating Cost",
+    "chart_type": "grouped_bar",
+    "complexity": "complex",
+    "columns": ["Division", "Profit Margin (%)", "Operating Cost ($M)"],
+    "rows": [
+      ["Retail", 12.5, 45.2],
+      ["Wholesale", 8.2, 85.0],
+      ["E-Commerce", 22.4, 30.1],
+      ["Logistics", 5.8, 62.4]
+    ],
+    "metadata": {
+      "categories": 4,
+      "series": 2,
+      "unit": "Mixed"
+    }
+  }
+]
