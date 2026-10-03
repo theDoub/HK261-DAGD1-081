@@ -16,11 +16,14 @@ from __future__ import annotations
 
 import pytest
 
-from src.format.schema import TableSchema
+from src.format.schema import TableSchema, TableTriplet
 from src.metrics.table_metrics import (
+    compute_pair_similarity,
     compute_rms_f1,
     compute_rnss,
     compute_value_recall_at_5,
+    normalized_levenshtein_tau,
+    relative_distance,
 )
 
 # =============================================================================
@@ -354,3 +357,76 @@ class TestEdgeCases:
         assert result["f1"] == pytest.approx(1.0, abs=1e-6), (
             f"F1 phải = 1.0 khi chỉ hoán vị cột, nhận {result['f1']:.6f}"
         )
+
+
+# =============================================================================
+# ── TEST ĐƠN VỊ TUẦN 3: NL_τ, D, VÀ SIM-CẶP (NV 3.1 & NV 3.2) ──
+# =============================================================================
+
+class TestWeek3PairwiseMetrics:
+    """Kiểm tra các hàm đo khoảng cách và độ tương đồng cho một cặp entry đơn lẻ."""
+
+    # ------------------------------------------------------------------
+    # NV 3.1: Normalized Levenshtein + Cắt ngưỡng τ = 0.5
+    # ------------------------------------------------------------------
+    def test_nl_tau_exact_match(self):
+        """Hai chuỗi giống hệt -> NL_tau = 0.0."""
+        assert normalized_levenshtein_tau("sales", "sales", tau=0.5) == 0.0
+
+    def test_nl_tau_below_threshold(self):
+        """Sai khác nhỏ (<= tau=0.5) -> giữ nguyên khoảng cách Levenshtein chuẩn hóa."""
+        # "sals" vs "sales": edit distance = 1, max_len = 5 -> NL = 0.20 <= 0.5
+        nl = normalized_levenshtein_tau("sals", "sales", tau=0.5)
+        assert nl == pytest.approx(0.20, abs=1e-6)
+
+    def test_nl_tau_cutoff_applied(self):
+        """Sai khác lớn (> tau=0.5) -> bị cắt ngưỡng, phạt tối đa 1.0."""
+        # "revenue" vs "sales": edit distance = 6, max_len = 7 -> NL = 6/7 ≈ 0.857 > 0.5
+        nl = normalized_levenshtein_tau("revenue", "sales", tau=0.5)
+        assert nl == 1.0
+
+    # ------------------------------------------------------------------
+    # NV 3.2: Sai số tương đối D = min(1, |p - t| / |t|)
+    # ------------------------------------------------------------------
+    def test_relative_distance_numeric_exact(self):
+        """Số khớp hoàn toàn -> D = 0.0."""
+        assert relative_distance(100.0, 100.0) == 0.0
+
+    def test_relative_distance_numeric_small_error(self):
+        """Số sai lệch nhỏ 3% -> D = 0.03."""
+        # |103 - 100| / 100 = 0.03
+        d = relative_distance(103.0, 100.0)
+        assert d == pytest.approx(0.03, abs=1e-6)
+
+    def test_relative_distance_numeric_cap(self):
+        """Số sai lệch lớn (> 100%) -> cắt tối đa tại 1.0."""
+        # |300 - 100| / 100 = 2.0 -> min(1.0, 2.0) = 1.0
+        assert relative_distance(300.0, 100.0) == 1.0
+
+    def test_relative_distance_text_exact_and_mismatch(self):
+        """Text giống nhau -> 0.0, khác nhau -> 1.0."""
+        assert relative_distance("North", "north") == 0.0  # case-insensitive
+        assert relative_distance("North", "South") == 1.0
+
+    # ------------------------------------------------------------------
+    # NV 3.2: Sim một cặp entry: sim = (1 - NL_tau) * (1 - D)
+    # ------------------------------------------------------------------
+    def test_pair_similarity_perfect_match(self):
+        """Header giống hệt + giá trị giống hệt -> sim = 1.0."""
+        p = TableTriplet(row=0, col="sales", value=100.0)
+        g = TableTriplet(row=0, col="sales", value=100.0)
+        assert compute_pair_similarity(p, g, tau=0.5) == pytest.approx(1.0, abs=1e-6)
+
+    def test_pair_similarity_small_numeric_error(self):
+        """Header giống hệt, số sai 3% -> sim = 1 * (1 - 0.03) = 0.97."""
+        p = TableTriplet(row=0, col="sales", value=103.0)
+        g = TableTriplet(row=0, col="sales", value=100.0)
+        assert compute_pair_similarity(p, g, tau=0.5) == pytest.approx(0.97, abs=1e-6)
+
+    def test_pair_similarity_header_cutoff_penalty(self):
+        """Header sai khác > tau=0.5 -> sim = 0.0 (dù số đúng hoàn toàn)."""
+        p = TableTriplet(row=0, col="revenue", value=100.0)
+        g = TableTriplet(row=0, col="sales", value=100.0)
+        # NL_tau = 1.0 -> sim = (1 - 1.0) * (1 - 0) = 0.0
+        assert compute_pair_similarity(p, g, tau=0.5) == 0.0
+

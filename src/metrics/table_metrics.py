@@ -50,6 +50,69 @@ def normalized_levenshtein(s1: str, s2: str) -> float:
     return dp[len1][len2] / max_len
 
 
+def normalized_levenshtein_tau(s1: str, s2: str, tau: float = 0.5) -> float:
+    """Computes Normalized Levenshtein distance with cutoff threshold tau (NV 3.1).
+
+    If the normalized edit distance exceeds tau, returns 1.0 (maximum penalty).
+    Otherwise returns the computed normalized distance in [0.0, tau].
+
+    Args:
+        s1: First string (e.g. predicted column header).
+        s2: Second string (e.g. ground-truth column header).
+        tau: Tolerance threshold (default: 0.5).
+
+    Returns:
+        float: Thresholded edit distance in [0.0, 1.0].
+    """
+    nl = normalized_levenshtein(s1, s2)
+    return 1.0 if nl > tau else nl
+
+
+def relative_distance(pv: Any, gv: Any, eps: float = 1e-6) -> float:
+    """Computes relative numerical distance D(p, t) = min(1.0, |p - t| / |t|) (NV 3.2).
+
+    For numeric pairs, returns relative distance capped at 1.0.
+    For non-numeric pairs, returns 0.0 if string values match (case-insensitive), else 1.0.
+
+    Args:
+        pv: Predicted cell value.
+        gv: Ground-truth cell value.
+        eps: Numerical stability constant to avoid division by zero.
+
+    Returns:
+        float: Relative distance in [0.0, 1.0].
+    """
+    if isinstance(pv, (int, float)) and isinstance(gv, (int, float)):
+        denom = max(abs(float(gv)), eps)
+        return float(min(1.0, abs(float(pv) - float(gv)) / denom))
+    return 0.0 if str(pv).strip().lower() == str(gv).strip().lower() else 1.0
+
+
+def compute_pair_similarity(
+    p: TableTriplet,
+    g: TableTriplet,
+    tau: float = 0.5,
+    eps: float = 1e-6,
+) -> float:
+    """Computes similarity between two table cell triplets (NV 3.2).
+
+    Formula:
+        sim(p, t) = (1 - NL_tau(col_p, col_t)) * (1 - D(val_p, val_t)) in [0.0, 1.0].
+
+    Args:
+        p: Predicted TableTriplet.
+        g: Ground-truth TableTriplet.
+        tau: Header Levenshtein threshold.
+        eps: Numerical stability constant.
+
+    Returns:
+        float: Pairwise similarity score in [0.0, 1.0].
+    """
+    nl_tau = normalized_levenshtein_tau(str(p.col), str(g.col), tau=tau)
+    d_val = relative_distance(p.value, g.value, eps=eps)
+    return float((1.0 - nl_tau) * (1.0 - d_val))
+
+
 def _extract_triplets(table: Union[TableSchema, Dict[str, Any], Any]) -> List[TableTriplet]:
     """Helper to convert any table input into a list of TableTriplets."""
     if isinstance(table, TableSchema):
@@ -69,20 +132,11 @@ def compute_rms_f1(
     """Computes RMS-F1 between predicted and ground-truth table triplets.
 
     Mathematical Definition:
-        1. Header matching: Normalized Levenshtein edit distance NL(h_p, h_t).
-           If NL > tau, NL_tau = 1.0 (header mismatch penalty), else NL_tau = NL.
-        2. Value matching: Relative numerical distance:
-           D(v_p, v_t) = min(1.0, |v_p - v_t| / max(|v_t|, eps)) if both numeric,
-           or 0.0 if exact string match, else 1.0.
-        3. Pair similarity:
-           sim(p, t) = (1 - NL_tau) * (1 - D) in [0.0, 1.0].
-        4. Bipartite matching:
-           Cost matrix C_{ij} = 1 - sim(p_i, t_j).
-           Optimal assignment computed via the Hungarian algorithm (linear_sum_assignment).
-        5. Score aggregation:
-           Precision P = sum(sim) / N
-           Recall R = sum(sim) / M
-           F1 = 2 * P * R / (P + R) (or 0.0 if P + R == 0).
+        1. Header matching: Normalized Levenshtein edit distance NL_tau(h_p, h_t).
+        2. Value matching: Relative numerical distance D(v_p, v_t).
+        3. Pair similarity: sim(p, t) = (1 - NL_tau) * (1 - D) in [0.0, 1.0].
+        4. Bipartite matching: Optimal assignment via Hungarian algorithm.
+        5. Score aggregation: Precision P, Recall R, Harmonic Mean F1.
 
     Args:
         pred_table: Predicted TableSchema, dict, or list of triplets.
@@ -108,19 +162,7 @@ def compute_rms_f1(
 
     for i, p in enumerate(preds):
         for j, g in enumerate(gts):
-            # Header distance
-            nl = normalized_levenshtein(str(p.col), str(g.col))
-            nl_tau = 1.0 if nl > tau else nl
-
-            # Value distance
-            pv, gv = p.value, g.value
-            if isinstance(pv, (int, float)) and isinstance(gv, (int, float)):
-                denom = max(abs(float(gv)), eps)
-                d_val = min(1.0, abs(float(pv) - float(gv)) / denom)
-            else:
-                d_val = 0.0 if str(pv).strip().lower() == str(gv).strip().lower() else 1.0
-
-            sim = (1.0 - nl_tau) * (1.0 - d_val)
+            sim = compute_pair_similarity(p, g, tau=tau, eps=eps)
             sim_matrix[i, j] = sim
             cost_matrix[i, j] = 1.0 - sim
 
@@ -178,8 +220,7 @@ def compute_rnss(pred_table: Any, gt_table: Any, eps: float = 1e-6) -> float:
     d_matrix = np.ones((n, m), dtype=np.float64)
     for i, pv in enumerate(pred_nums):
         for j, gv in enumerate(gt_nums):
-            denom = max(abs(gv), eps)
-            d_matrix[i, j] = min(1.0, abs(pv - gv) / denom)
+            d_matrix[i, j] = relative_distance(pv, gv, eps=eps)
 
     # Hungarian matching on distance matrix (minimize cost = minimize distance)
     row_ind, col_ind = linear_sum_assignment(d_matrix)

@@ -44,17 +44,17 @@ pytest tests/test_gate1_rms_f1.py::TestGate1Mandatory -v
 ```
 **Expected outcome:** `5 passed`.
 
-### 2. Run All Metric Tests (RMS-F1, RNSS, Value-Recall)
+### 2. Run All Metric Tests (RMS-F1, RNSS, Value-Recall, Pairwise)
 ```bash
 pytest tests/test_gate1_rms_f1.py -v
 ```
-**Expected outcome:** `19 passed` (covers exact matches, permutations, numeric errors, text omissions, and edge cases).
+**Expected outcome:** `29 passed` (covers exact matches, permutations, numeric errors, text omissions, edge cases, and Week 3 pairwise metric tests).
 
 ### 3. Run the Entire Test Suite
 ```bash
 pytest tests/ -v
 ```
-**Expected outcome:** `29 passed` across all modules (B1–B6).
+**Expected outcome:** `39 passed` across all modules (B1–B6).
 
 ### 4. Run End-to-End Pipeline Smoke Test
 ```bash
