@@ -1,128 +1,195 @@
-"""Module B6: Two-Stage Pipeline Evaluation Engine.
+"""Module B6: Pipeline Evaluation and Error Analysis.
 
-Orchestrates the multimodal Chart-to-Table -> Table QA evaluation flow:
-Stage 1: Input Chart -> DePlot Model -> Predicted TableSchema.
-Stage 2: Predicted TableSchema + Question -> VLM/LLM Client -> Predicted Answer.
-Evaluation: Computes RMS-F1, RNSS (Stage 1) and Exact/Relaxed Accuracy (Stage 2).
+Orchestrates table extraction across datasets, evaluates predictions against gold tables
+using Module B2 metrics, computes aggregations broken down by chart type and complexity,
+and categorizes extraction errors for error analysis.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
+import yaml
 
-from src.data_loader.loader import ChartDatasetItem
 from src.format.schema import TableSchema
 from src.metrics.table_metrics import (
-    compute_qa_accuracy,
-    compute_relaxed_accuracy,
     compute_rms_f1,
     compute_rnss,
+    compute_value_recall_at_5,
 )
-from src.models.deplot import DePlotHarness
-from src.models.vlm_client import VLMClient
+from src.models.harness import ExtractionResult, VLMTableHarness
 
 logger = logging.getLogger(__name__)
 
 
+def categorize_error(
+    pred_table: Optional[TableSchema],
+    gt_table: TableSchema,
+    f1_score: float,
+) -> str:
+    """Classifies extraction failures into actionable diagnosis buckets.
+
+    Buckets:
+        - 'none': Successful extraction (F1 >= 0.8).
+        - 'missing_data': Model produced no table or completely empty rows.
+        - 'header_mismatch': Low column name overlap with ground-truth.
+        - 'structural_error': Significant mismatch in row/column count or grid shape.
+        - 'numeric_error': Structure is aligned but numerical values are inaccurate.
+
+    Args:
+        pred_table: Extracted table structure or None.
+        gt_table: Ground-truth table structure.
+        f1_score: Computed RMS-F1 score.
+
+    Returns:
+        str: Error category string.
+    """
+    if f1_score >= 0.8:
+        return "none"
+
+    if pred_table is None or len(pred_table.rows) == 0 or len(pred_table.columns) == 0:
+        return "missing_data"
+
+    pred_cols = set(c.strip().lower() for c in pred_table.columns)
+    gt_cols = set(c.strip().lower() for c in gt_table.columns)
+    col_overlap = len(pred_cols & gt_cols) / max(len(gt_cols), 1)
+
+    if col_overlap < 0.5:
+        return "header_mismatch"
+
+    if len(pred_table.rows) != len(gt_table.rows) or len(pred_table.columns) != len(gt_table.columns):
+        return "structural_error"
+
+    return "numeric_error"
+
+
 class PipelineEvaluator:
-    """Evaluates the end-to-end two-stage ChartQA pipeline on a dataset."""
+    """End-to-end evaluation harness supporting metric aggregation and error diagnosis."""
 
     def __init__(
         self,
-        deplot_harness: Optional[DePlotHarness] = None,
-        vlm_client: Optional[VLMClient] = None,
+        harness: Optional[VLMTableHarness] = None,
+        config_path: Optional[Union[str, Path]] = None,
     ) -> None:
-        """Initializes the evaluator with model stubs.
+        """Initializes the evaluator with an extraction harness and optional config."""
+        self.harness = harness or VLMTableHarness(backend="mock")
+        self.config_path = Path(config_path) if config_path else Path("configs/config.yaml")
+
+    def run_sanity_check(self) -> Dict[str, Any]:
+        """Verifies environment and pipeline configuration loading."""
+        if not self.config_path.exists():
+            logger.warning("Config file not found at %s", self.config_path)
+            return {"status": "warning", "message": f"Missing config: {self.config_path}"}
+
+        with open(self.config_path, "r", encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+
+        return {"status": "ok", "config": config}
+
+    def evaluate_sample(
+        self,
+        gt_table: TableSchema,
+        image_path: Optional[Union[str, Path]] = None,
+    ) -> Dict[str, Any]:
+        """Evaluates extraction on a single chart sample against gold table.
 
         Args:
-            deplot_harness: Harness for visual table extraction (Stage 1).
-            vlm_client: Client for table QA reasoning (Stage 2).
-        """
-        self.deplot_harness = deplot_harness or DePlotHarness(dry_run=True)
-        self.vlm_client = vlm_client or VLMClient(provider="vlm_stub")
-
-    def evaluate_sample(self, item: ChartDatasetItem) -> Dict[str, Any]:
-        """Runs the two-stage pipeline on a single sample and calculates metrics.
-
-        Args:
-            item: Input dataset item containing image path, question, answer, and optional table.
+            gt_table: Ground-truth TableSchema.
+            image_path: Optional path to chart image.
 
         Returns:
-            Dict[str, Any]: Evaluation record containing predictions and metric scores.
+            Dict[str, Any]: Single sample evaluation record.
         """
-        # Stage 1: Chart -> Table
-        pred_table: TableSchema = self.deplot_harness.extract_table(
-            image_input=item.image_path or "mock_path.png"
-        )
+        # Step 1: Extract via VLM Harness (Module B5)
+        extract_res: ExtractionResult = self.harness.extract_table(image_path)
+        pred_table = extract_res.table
 
-        # Stage 2: Table + Question -> Answer
-        pred_answer: str = self.vlm_client.answer_question(
-            table=item.table or pred_table,
-            question=item.question,
-        )
+        # Step 2: Compute Metrics (Module B2)
+        if pred_table and extract_res.parse_ok:
+            rms = compute_rms_f1(pred_table, gt_table)
+            rnss = compute_rnss(pred_table, gt_table)
+            val_recall = compute_value_recall_at_5(pred_table, gt_table)
+        else:
+            rms = {"precision": 0.0, "recall": 0.0, "f1": 0.0}
+            rnss = 0.0
+            val_recall = 0.0
 
-        result: Dict[str, Any] = {
-            "id": item.id,
-            "question": item.question,
-            "ground_truth_answer": item.answer,
-            "predicted_answer": pred_answer,
-            "pred_table": pred_table.to_dict(),
+        # Step 3: Categorize Error
+        error_bucket = categorize_error(pred_table, gt_table, rms["f1"])
+
+        meta = gt_table.metadata or {}
+        return {
+            "sample_id": meta.get("id", "sample"),
+            "chart_type": meta.get("chart_type", "unknown"),
+            "complexity": meta.get("complexity", "unknown"),
+            "parse_ok": extract_res.parse_ok,
+            "precision": rms["precision"],
+            "recall": rms["recall"],
+            "rms_f1": rms["f1"],
+            "rnss": rnss,
+            "value_recall_at_5": val_recall,
+            "error_category": error_bucket,
+            "error_message": extract_res.error_message,
         }
 
-        # Calculate Table Extraction Metrics if Ground Truth Table exists
-        if item.table:
-            rms = compute_rms_f1(pred_table, item.table)
-            rnss = compute_rnss(pred_table, item.table)
-            result["rms_f1"] = rms["f1"]
-            result["rnss"] = rnss
-
-        # Calculate QA Metrics if Ground Truth Answer exists
-        if item.answer is not None:
-            result["qa_exact_match"] = compute_qa_accuracy(pred_answer, item.answer)
-            result["qa_relaxed_accuracy"] = compute_relaxed_accuracy(pred_answer, item.answer)
-
-        return result
-
-    def evaluate_dataset(self, dataset: List[ChartDatasetItem]) -> Dict[str, Any]:
-        """Evaluates a full collection of dataset items and aggregates scores.
+    def evaluate_dataset(self, dataset: List[TableSchema]) -> Dict[str, Any]:
+        """Runs full evaluation across a collection of tables, computing breakdowns by type and complexity.
 
         Args:
-            dataset: List of ChartDatasetItem instances.
+            dataset: List of ground-truth TableSchema instances.
 
         Returns:
-            Dict[str, Any]: Aggregated evaluation summary.
+            Dict[str, Any]: Aggregated summary and error analysis.
         """
         records: List[Dict[str, Any]] = []
-        total_samples = len(dataset)
+        total = len(dataset)
 
-        for item in dataset:
-            record = self.evaluate_sample(item)
+        for gt_table in dataset:
+            record = self.evaluate_sample(gt_table)
             records.append(record)
 
-        # Aggregate metrics
-        avg_em = (
-            sum(r.get("qa_exact_match", 0.0) for r in records) / total_samples
-            if total_samples > 0
-            else 0.0
-        )
-        avg_relaxed = (
-            sum(r.get("qa_relaxed_accuracy", 0.0) for r in records) / total_samples
-            if total_samples > 0
-            else 0.0
-        )
+        if total == 0:
+            return {"total_samples": 0, "mean_rms_f1": 0.0}
 
-        summary = {
-            "total_samples": total_samples,
-            "mean_exact_match": avg_em,
-            "mean_relaxed_accuracy": avg_relaxed,
-            "sample_results": records,
+        mean_f1 = sum(r["rms_f1"] for r in records) / total
+        mean_rnss = sum(r["rnss"] for r in records) / total
+        mean_val_recall = sum(r["value_recall_at_5"] for r in records) / total
+
+        # Breakdown by chart_type
+        by_chart_type: Dict[str, List[float]] = {}
+        by_complexity: Dict[str, List[float]] = {}
+        error_distribution: Dict[str, int] = {
+            "missing_data": 0,
+            "header_mismatch": 0,
+            "structural_error": 0,
+            "numeric_error": 0,
+            "none": 0,
         }
 
-        logger.info(
-            "Evaluation complete. Total: %d, Mean EM: %.4f, Mean Relaxed Acc: %.4f",
-            total_samples,
-            avg_em,
-            avg_relaxed,
-        )
-        return summary
+        for r in records:
+            ctype = r["chart_type"]
+            comp = r["complexity"]
+            err = r["error_category"]
+
+            by_chart_type.setdefault(ctype, []).append(r["rms_f1"])
+            by_complexity.setdefault(comp, []).append(r["rms_f1"])
+            error_distribution[err] = error_distribution.get(err, 0) + 1
+
+        chart_type_summary = {
+            k: float(sum(v) / len(v)) for k, v in by_chart_type.items()
+        }
+        complexity_summary = {
+            k: float(sum(v) / len(v)) for k, v in by_complexity.items()
+        }
+
+        return {
+            "total_samples": total,
+            "mean_rms_f1": float(mean_f1),
+            "mean_rnss": float(mean_rnss),
+            "mean_value_recall_at_5": float(mean_val_recall),
+            "breakdown_by_chart_type": chart_type_summary,
+            "breakdown_by_complexity": complexity_summary,
+            "error_analysis": error_distribution,
+            "records": records,
+        }

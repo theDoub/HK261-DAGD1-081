@@ -1,119 +1,195 @@
-"""Unit tests for the Chart-to-Table -> Table QA pipeline components."""
+"""Comprehensive Unit Tests for Modules B1 to B6."""
 
-import json
 from pathlib import Path
 import pytest
 
-from src.data_loader.loader import ChartDataLoader, ChartDatasetItem
-from src.evaluation.evaluator import PipelineEvaluator
-from src.format.schema import TableSchema
+from src.data_loader.loader import ChartDataLoader
+from src.data_loader.synthetic import SyntheticSanitySet, load_synthetic_tables
+from src.evaluation.evaluator import PipelineEvaluator, categorize_error
+from src.format.parser import (
+    normalize_header,
+    normalize_value,
+    parse_csv_table,
+    parse_deplot_linearized,
+    parse_markdown_table,
+    parse_table_text,
+    strip_markdown_codeblocks,
+)
+from src.format.schema import TableSchema, TableTriplet
 from src.metrics.table_metrics import (
-    compute_qa_accuracy,
-    compute_relaxed_accuracy,
     compute_rms_f1,
     compute_rnss,
+    compute_value_recall_at_5,
+    normalized_levenshtein,
 )
-from src.models.deplot import DePlotHarness
-from src.models.vlm_client import VLMClient
+from src.models.harness import MockBackend, VLMTableHarness
 
 
-@pytest.fixture
-def sample_table_data():
-    return {
-        "title": "Quarterly Revenue",
-        "columns": ["Region", "Q1", "Q2"],
-        "rows": [
-            ["North America", 100.0, 110.0],
-            ["Europe", 80.0, 85.0],
-        ],
-        "metadata": {"unit": "Million USD"},
-    }
+# ---------------------------------------------------------
+# Module B1 Tests
+# ---------------------------------------------------------
+
+def test_normalization():
+    """Verifies header and value normalization rules."""
+    # Header normalization
+    assert normalize_header("  Quarterly   Sales  (USD) ") == "quarterly sales (usd)"
+    assert normalize_header("Product\nName") == "product name"
+
+    # Value normalization
+    assert normalize_value(" $1,250.50 ") == 1250.50
+    assert normalize_value("45.2%") == 45.2
+    assert normalize_value("1,000") == 1000
+    assert normalize_value("N/A") is None
+    assert normalize_value("Category Alpha") == "Category Alpha"
 
 
-def test_table_schema_creation(sample_table_data):
-    """Verifies TableSchema initialization, shape validation, and dictionary round-trip."""
-    table = TableSchema.from_dict(sample_table_data)
-    assert table.title == "Quarterly Revenue"
-    assert len(table.columns) == 3
-    assert len(table.rows) == 2
-    assert table.validate_shape() is True
-
-    # Test serialization
-    data_dict = table.to_dict()
-    assert data_dict["title"] == "Quarterly Revenue"
-    assert data_dict["columns"] == ["Region", "Q1", "Q2"]
-
-
-def test_table_schema_markdown_and_dataframe(sample_table_data):
-    """Verifies rendering to Markdown and conversion to pandas DataFrame."""
-    table = TableSchema.from_dict(sample_table_data)
-    md = table.to_markdown()
-    assert "### Quarterly Revenue" in md
-    assert "| Region | Q1 | Q2 |" in md
-
-    df = table.to_dataframe()
-    assert df.shape == (2, 3)
-    assert list(df.columns) == ["Region", "Q1", "Q2"]
-
-
-def test_table_schema_linearization():
-    """Verifies linearized text serialization and deserialization."""
-    table = TableSchema(
-        title="Test Plot",
-        columns=["Year", "Score"],
-        rows=[[2021, 95.5], [2022, 98.0]],
+def test_codeblock_stripping():
+    """Verifies stripping markdown code fences and conversational preamble."""
+    raw = (
+        "Here is the result you requested:\n\n"
+        "```markdown\n"
+        "| A | B |\n"
+        "|---|---|\n"
+        "| 1 | 2 |\n"
+        "```\n"
+        "Hope this helps!"
     )
-    linearized = table.to_linearized_text()
-    assert "TITLE | Test Plot" in linearized
-    assert "Year | Score" in linearized
+    stripped = strip_markdown_codeblocks(raw)
+    assert stripped == "| A | B |\n|---|---|\n| 1 | 2 |"
 
-    reconstructed = TableSchema.from_linearized_text(linearized)
-    assert reconstructed.title == "Test Plot"
-    assert reconstructed.columns == ["Year", "Score"]
+
+def test_markdown_and_csv_parsers():
+    """Verifies parsing markdown and CSV texts into TableSchema with triplets."""
+    md_text = (
+        "### Revenue\n"
+        "| Region | Q1 | Q2 |\n"
+        "|---|---|---|\n"
+        "| North | $100 | $120 |\n"
+        "| South | $80 | $90 |"
+    )
+    table_md = parse_markdown_table(md_text)
+    assert table_md.title == "Revenue"
+    assert table_md.columns == ["region", "q1", "q2"]
+    assert table_md.rows[0] == ["North", 100, 120]
+    assert len(table_md.triplets) == 6
+    assert isinstance(table_md.triplets[0], TableTriplet)
+
+    csv_text = "Year,Rate\n2021,5.2%\n2022,6.1%"
+    table_csv = parse_csv_table(csv_text)
+    assert table_csv.columns == ["year", "rate"]
+    assert table_csv.rows[0] == [2021, 5.2]
+
+
+def test_deplot_linearized_parser():
+    """Verifies parsing DePlot output with <0x0A> and TITLE tokens."""
+    deplot_text = "TITLE | Energy<0x0A>Type | Amount<0x0A>Solar | 150<0x0A>Wind | 200"
+    table = parse_deplot_linearized(deplot_text)
+    assert table.title == "Energy"
+    assert table.columns == ["type", "amount"]
+    assert table.rows[0] == ["Solar", 150]
+    assert table.rows[1] == ["Wind", 200]
+
+
+def test_triplet_reconstruction():
+    """Verifies converting to and from TableTriplets."""
+    triplets = [
+        TableTriplet(row=0, col="Product", value="Laptop"),
+        TableTriplet(row=0, col="Price", value=1200),
+        TableTriplet(row=1, col="Product", value="Phone"),
+        TableTriplet(row=1, col="Price", value=800),
+    ]
+    reconstructed = TableSchema.from_triplets(triplets, title="Inventory")
+    assert reconstructed.columns == ["Product", "Price"]
     assert len(reconstructed.rows) == 2
-    assert reconstructed.rows[0][1] == 95.5
+    assert reconstructed.rows[0] == ["Laptop", 1200]
 
 
-def test_metrics():
-    """Verifies RMS-F1, RNSS, and QA accuracy calculations."""
-    t1 = TableSchema(columns=["A", "B"], rows=[["x", 100.0], ["y", 200.0]])
-    t2 = TableSchema(columns=["A", "B"], rows=[["x", 102.0], ["y", 199.0]])
+# ---------------------------------------------------------
+# Module B2 Tests
+# ---------------------------------------------------------
 
-    # 102 vs 100 is within 5% tolerance, 199 vs 200 is within 5%
-    metrics = compute_rms_f1(t1, t2, tolerance=0.05)
-    assert metrics["f1"] == 1.0
+def test_metrics_computation():
+    """Verifies RMS-F1, RNSS, and Value-Recall@5%."""
+    t_gold = TableSchema(
+        columns=["quarter", "sales"],
+        rows=[["Q1", 100.0], ["Q2", 200.0]],
+    )
+    t_pred = TableSchema(
+        columns=["quarter", "sales"],
+        rows=[["Q1", 102.0], ["Q2", 195.0]],  # both within 5% error
+    )
 
-    rnss = compute_rnss(t1, t2)
-    assert rnss == 1.0
+    rms = compute_rms_f1(t_pred, t_gold)
+    assert rms["f1"] > 0.95
+    assert rms["precision"] > 0.95
+    assert rms["recall"] > 0.95
 
-    # Test QA accuracy
-    assert compute_qa_accuracy("North America", "north america") == 1.0
-    assert compute_qa_accuracy("North America", "Europe") == 0.0
+    rnss = compute_rnss(t_pred, t_gold)
+    assert rnss > 0.95
 
-    # Test relaxed accuracy with 5% threshold
-    assert compute_relaxed_accuracy("104.5", "100.0", tolerance=0.05) == 1.0
-    assert compute_relaxed_accuracy("110.0", "100.0", tolerance=0.05) == 0.0
-
-
-def test_data_loader_sanity():
-    """Verifies loading mock sanity dataset."""
-    loader = ChartDataLoader(data_dir="data")
-    samples = loader.load_sanity_data()
-    assert len(samples) > 0
-    assert samples[0].table is not None
-    assert samples[0].table.validate_shape() is True
+    val_recall = compute_value_recall_at_5(t_pred, t_gold, tolerance=0.05)
+    assert val_recall == 1.0
 
 
-def test_end_to_end_pipeline_evaluation():
-    """Verifies the two-stage evaluation pipeline execution on a mock sample."""
-    harness = DePlotHarness(dry_run=True)
-    vlm = VLMClient(provider="vlm_stub")
-    evaluator = PipelineEvaluator(deplot_harness=harness, vlm_client=vlm)
+# ---------------------------------------------------------
+# Module B3 & B4 Tests
+# ---------------------------------------------------------
 
-    loader = ChartDataLoader(data_dir="data")
-    samples = loader.load_sanity_data()
-    summary = evaluator.evaluate_dataset(samples)
+def test_synthetic_sanity_set():
+    """Verifies loading synthetic mock tables."""
+    dataset = SyntheticSanitySet()
+    tables = dataset.get_tables()
+    assert len(tables) >= 5
 
-    assert summary["total_samples"] == len(samples)
-    assert "mean_exact_match" in summary
-    assert "mean_relaxed_accuracy" in summary
+    simple_tables = dataset.filter_by_complexity("simple")
+    assert len(simple_tables) > 0
+
+    bar_tables = dataset.filter_by_chart_type("bar")
+    assert len(bar_tables) > 0
+
+
+def test_real_data_loader_missing_csv(tmp_path):
+    """Verifies error handling when a chart image lacks a corresponding CSV table."""
+    loader = ChartDataLoader(data_dir=tmp_path)
+    # Non-existent CSV should log an error and return None safely
+    table = loader.load_table_from_csv(tmp_path / "missing.csv")
+    assert table is None
+
+
+# ---------------------------------------------------------
+# Module B5 & B6 Tests
+# ---------------------------------------------------------
+
+def test_vlm_table_harness():
+    """Verifies VLMTableHarness extraction and failure isolation."""
+    mock_table = "| Item | Value |\n|---|---|\n| A | 10 |"
+    harness = VLMTableHarness(backend=MockBackend(mock_table))
+    res = harness.extract_table()
+
+    assert res.parse_ok is True
+    assert res.table is not None
+    assert res.table.columns == ["item", "value"]
+
+
+def test_evaluator_and_error_categorization():
+    """Verifies pipeline evaluation aggregations and error categorization."""
+    gt = TableSchema(columns=["a", "b"], rows=[[1, 2], [3, 4]])
+
+    # Test error categorization buckets
+    assert categorize_error(None, gt, 0.0) == "missing_data"
+
+    pred_wrong_headers = TableSchema(columns=["x", "y"], rows=[[1, 2]])
+    assert categorize_error(pred_wrong_headers, gt, 0.0) == "header_mismatch"
+
+    pred_wrong_shape = TableSchema(columns=["a", "b"], rows=[[1, 2]])
+    assert categorize_error(pred_wrong_shape, gt, 0.5) == "structural_error"
+
+    pred_good = TableSchema(columns=["a", "b"], rows=[[1, 2], [3, 4]])
+    assert categorize_error(pred_good, gt, 1.0) == "none"
+
+    # Test full evaluator run
+    evaluator = PipelineEvaluator()
+    summary = evaluator.evaluate_dataset([gt])
+    assert "mean_rms_f1" in summary
+    assert "breakdown_by_chart_type" in summary
+    assert "error_analysis" in summary
