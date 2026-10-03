@@ -139,21 +139,54 @@ def compute_rms_f1(
 
 
 def compute_rnss(pred_table: Any, gt_table: Any, eps: float = 1e-6) -> float:
-    """Computes Relative Numerical Structural Similarity (RNSS) on numeric entries.
+    """Computes Relative Numerical Structural Similarity (RNSS) on numeric entries only.
 
-    Measures alignment, shape equivalence, and numerical relative divergence across
-    table matrices.
+    As defined in P05 DePlot (§3.1): RNSS looks only at the *unordered set* of numeric
+    entries in the predicted and target tables, and measures how well the predicted set
+    matches the target set using relative distances and optimal (Hungarian) matching.
+
+    Formula:
+        D(p, t) = min(1, |p - t| / |t|)   for each numeric pair
+        X = optimal binary matching matrix (Hungarian on D_matrix)
+        RNSS = 1 - sum(X_ij * D(p_i, t_j)) / max(N, M)
+
+    Note: RNSS intentionally ignores column/row headers and table structure —
+    use RMS-F1 when structure matters.
 
     Args:
         pred_table: Predicted table representation.
         gt_table: Ground-truth table representation.
-        eps: Numerical stability constant.
+        eps: Numerical stability constant for division by zero.
 
     Returns:
-        float: Similarity score in [0.0, 1.0].
+        float: RNSS score in [0.0, 1.0]. 1.0 = perfect numeric match.
     """
-    rms = compute_rms_f1(pred_table, gt_table, eps=eps)
-    return float(rms["f1"])
+    preds = _extract_triplets(pred_table)
+    gts = _extract_triplets(gt_table)
+
+    # Filter to numeric values only
+    pred_nums = [float(p.value) for p in preds if isinstance(p.value, (int, float))]
+    gt_nums = [float(g.value) for g in gts if isinstance(g.value, (int, float))]
+
+    n, m = len(pred_nums), len(gt_nums)
+    if n == 0 and m == 0:
+        return 1.0
+    if n == 0 or m == 0:
+        return 0.0
+
+    # Build N×M relative-distance matrix
+    d_matrix = np.ones((n, m), dtype=np.float64)
+    for i, pv in enumerate(pred_nums):
+        for j, gv in enumerate(gt_nums):
+            denom = max(abs(gv), eps)
+            d_matrix[i, j] = min(1.0, abs(pv - gv) / denom)
+
+    # Hungarian matching on distance matrix (minimize cost = minimize distance)
+    row_ind, col_ind = linear_sum_assignment(d_matrix)
+    total_d = float(np.sum(d_matrix[row_ind, col_ind]))
+
+    # RNSS = 1 - avg relative error, normalized by max(N, M) per DePlot eq. (1)
+    return float(1.0 - total_d / max(n, m))
 
 
 def compute_value_recall_at_5(
