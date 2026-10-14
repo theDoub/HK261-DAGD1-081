@@ -65,15 +65,27 @@ class TableSchema(BaseModel):
         return pd.DataFrame(self.rows, columns=self.columns)
 
     def to_markdown(self) -> str:
-        """Renders table as formatted GitHub-Flavored Markdown.
+      """Renders table as formatted GitHub-Flavored Markdown."""
 
-        Returns:
-            str: Markdown formatted table string.
-        """
-        table_str = tabulate(self.rows, headers=self.columns, tablefmt="github")
-        if self.title:
-            return f"### {self.title}\n\n{table_str}"
-        return table_str
+      rows = [
+          [
+              str(value) if isinstance(value, float) else value
+              for value in row
+          ]
+          for row in self.rows
+      ]
+
+      table_str = tabulate(
+          rows,
+          headers=self.columns,
+          tablefmt="github",
+          disable_numparse=True,
+      )
+
+      if self.title:
+          return f"### {self.title}\n\n{table_str}"
+
+      return table_str
 
     def to_dict(self) -> Dict[str, Any]:
         """Serializes TableSchema to a standard Python dictionary.

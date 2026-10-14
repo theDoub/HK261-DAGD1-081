@@ -16,7 +16,7 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from src.format.parser import parse_table_text
 from src.format.schema import TableSchema
@@ -88,6 +88,31 @@ class OpenVLMBackend(BaseExtractionBackend):
         )
 
 
+class DePlotBackend(BaseExtractionBackend):
+    """Backend adapter that exposes DePlot through the extraction interface."""
+
+    def __init__(
+        self,
+        predictor: Optional[Callable[[Union[str, Path]], str]] = None,
+        **model_kwargs: Any,
+    ) -> None:
+        self._predictor = predictor
+        self._model_kwargs = model_kwargs
+
+    def generate(self, prompt: str, image_path: Optional[Union[str, Path]] = None) -> str:
+        """Runs DePlot on an image, loading the model only when first needed."""
+        if image_path is None:
+            raise ValueError("DePlot extraction requires an image_path")
+
+        if self._predictor is None:
+            from src.models.deplot import DePlotHarness
+
+            model = DePlotHarness(**self._model_kwargs)
+            self._predictor = model.predict
+
+        return self._predictor(image_path)
+
+
 class APIVLMBackend(BaseExtractionBackend):
     """Stub harness for hosted vision APIs (e.g. Gemini 2.5, Claude 3.7) with in-memory caching."""
 
@@ -132,12 +157,14 @@ class VLMTableHarness:
         """Initializes the harness.
 
         Args:
-            backend: Backend instance or name ('mock', 'open_vlm', 'api_vlm').
+            backend: Backend instance or name ('mock', 'open_vlm', 'api_vlm', 'deplot').
             target_format: Expected output format ('markdown' or 'deplot').
         """
         self.target_format = target_format
         if isinstance(backend, BaseExtractionBackend):
             self.backend = backend
+        elif backend == "deplot":
+            self.backend = DePlotBackend()
         elif backend == "open_vlm":
             self.backend = OpenVLMBackend()
         elif backend == "api_vlm":
@@ -177,7 +204,6 @@ class VLMTableHarness:
         try:
             raw_text = self.backend.generate(active_prompt, image_path)
         except Exception as e:
-            logger.error("Backend generation error on %s: %s", image_path, e)
             return ExtractionResult(
                 raw_text="",
                 table=None,

@@ -184,49 +184,114 @@ def parse_csv_table(text: str) -> TableSchema:
 
 
 def parse_deplot_linearized(text: str) -> TableSchema:
-    """Parses a Linearized DePlot output string (using '<0x0A>' or newline delimiters).
-
-    Format:
-        TITLE | <title>
-        col1 | col2 | ...
-        row1_c1 | row1_c2 | ...
-
-    Args:
-        text: Linearized table string from DePlot.
-
-    Returns:
-        TableSchema: Parsed TableSchema.
     """
-    cleaned = strip_markdown_codeblocks(text)
-    # Replace '<0x0A>' tokens with newline
-    normalized_text = cleaned.replace("<0x0A>", "\n")
-    lines = [line.strip() for line in normalized_text.split("\n") if line.strip()]
+    Parse raw DePlot output or custom Linearized DePlot text.
+
+    Supported examples:
+
+        TITLE | Revenue vs Expenses
+        Product | Revenue | Expenses
+        Speakers | 112472.5 | 89181.4
+
+    Also supports:
+
+        TITLE | Revenue vs Expenses
+        <START> Product | Revenue | Expenses
+        <NEW_ROW> Speakers | 112472.5 | 89181.4
+        <END>
+    """
+
+    if not isinstance(text, str):
+        raise TypeError("DePlot input must be a string")
+
+    normalized_text = text.replace("<0x0A>", "\n")
+
+    # Remove optional code fences without interpreting commas
+    # or pipes as evidence of a table.
+    normalized_text = re.sub(
+        r"^\s*```(?:\w+)?\s*\n?",
+        "",
+        normalized_text,
+    )
+    normalized_text = re.sub(
+        r"\n?\s*```\s*$",
+        "",
+        normalized_text,
+    )
+
+    lines = [
+        line.strip()
+        for line in normalized_text.splitlines()
+        if line.strip()
+    ]
 
     title = ""
     columns: List[str] = []
     rows: List[List[Any]] = []
     triplets: List[TableTriplet] = []
 
-    data_row_idx = 0
     for line in lines:
+        if line == "<END>":
+            break
+
         if line.startswith("TITLE |"):
-            title = line.split("TITLE |", 1)[1].strip()
+            title = line.split("|", 1)[1].strip()
             continue
 
-        parts = [p.strip() for p in line.split("|")]
-        if not columns:
-            columns = [normalize_header(p) for p in parts]
-        else:
-            row_vals: List[Any] = []
-            for c_idx, col_name in enumerate(columns):
-                raw_cell = parts[c_idx] if c_idx < len(parts) else ""
-                val = normalize_value(raw_cell)
-                row_vals.append(val)
-                triplets.append(TableTriplet(row=data_row_idx, col=col_name, value=val))
-            rows.append(row_vals)
-            data_row_idx += 1
+        if line.startswith("<START>"):
+            line = line[len("<START>"):].strip()
+            if line.startswith("TITLE |"):
+                title = line.split("|", 1)[1].strip()
+                continue
 
-    return TableSchema(title=title, columns=columns, rows=rows, triplets=triplets)
+        is_data_row = line.startswith("<NEW_ROW>")
+
+        if is_data_row:
+            line = line[len("<NEW_ROW>"):].strip()
+
+        if not line:
+            continue
+
+        parts = [part.strip() for part in line.split("|")]
+
+        if not columns:
+            columns = [normalize_header(part) for part in parts]
+            continue
+
+        # Explicit row tokens identify data rows.
+        # Without them, support the original DePlot format.
+        raw_values = parts
+
+        if len(raw_values) != len(columns):
+            raise ValueError(
+                f"Expected {len(columns)} columns, "
+                f"received {len(raw_values)} in row: {line}"
+            )
+
+        row_idx = len(rows)
+
+        values = [
+            normalize_value(value)
+            for value in raw_values
+        ]
+
+        rows.append(values)
+
+        for col_name, value in zip(columns, values):
+            triplets.append(
+                TableTriplet(
+                    row=row_idx,
+                    col=col_name,
+                    value=value,
+                )
+            )
+
+    return TableSchema(
+        title=title,
+        columns=columns,
+        rows=rows,
+        triplets=triplets,
+    )
 
 
 def parse_table_text(text: str, fmt: str = "auto") -> TableSchema:

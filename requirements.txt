@@ -5,3 +5,7 @@ tabulate
 pyyaml
 pytest
 scipy
+torch
+transformers
+pillow
+pandas
