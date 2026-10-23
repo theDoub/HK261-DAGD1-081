@@ -189,13 +189,13 @@ def test_deplot_backend_extracts_and_parses_native_output(tmp_path):
     assert result.raw_text == raw_output
     assert result.table is not None
     assert result.table.title == "Energy"
-    assert result.table.columns == ["Type", "Amount"]
+    assert result.table.columns == ["type", "amount"]
     assert result.table.rows == [["Solar", 150], ["Wind", 200]]
     assert [(cell.row, cell.col, cell.value) for cell in result.table.triplets] == [
-        (0, "Type", "Solar"),
-        (0, "Amount", 150),
-        (1, "Type", "Wind"),
-        (1, "Amount", 200),
+        (0, "type", "Solar"),
+        (0, "amount", 150),
+        (1, "type", "Wind"),
+        (1, "amount", 200),
     ]
 
 

@@ -1,0 +1,14 @@
+{
+    "id": "line_10",
+    "image": "line_10.png",
+    "gold_table": "line_10.csv",
+    "chart_type": "line",
+    "n_categories": 6,
+    "n_series": 1,
+    "n_values": 6,
+    "dpi": 300,
+    "complexity": "simple",
+    "complexity_level": "simple",
+    "complexity_rule": "value_count_v1",
+    "label_source": "generator"
+}
