@@ -15,6 +15,7 @@ from src.format.parser import (
     parse_table_text,
     strip_markdown_codeblocks,
 )
+from src.format.formatter import to_linearized_deplot
 from src.format.schema import TableSchema, TableTriplet
 from src.metrics.table_metrics import (
     compute_rms_f1,
@@ -22,7 +23,7 @@ from src.metrics.table_metrics import (
     compute_value_recall_at_5,
     normalized_levenshtein,
 )
-from src.models.harness import MockBackend, VLMTableHarness
+from src.models.harness import DePlotBackend, MockBackend, VLMTableHarness
 
 
 # ---------------------------------------------------------
@@ -171,6 +172,61 @@ def test_vlm_table_harness():
     assert res.table.columns == ["item", "value"]
 
 
+def test_deplot_backend_extracts_and_parses_native_output(tmp_path):
+    image_path = tmp_path / r"data\raw\chart-for-test.jpg" 
+    raw_output = "TITLE | Energy<0x0A>Type | Amount<0x0A>Solar | 150<0x0A>Wind | 200"
+    received_paths = []
+    backend = DePlotBackend(
+        predictor=lambda path: received_paths.append(path) or raw_output
+    )
+    harness = VLMTableHarness(backend=backend, target_format="deplot")
+
+    result = harness.extract_table(image_path)
+
+    assert received_paths == [image_path]
+    assert result.parse_ok is True
+    assert result.backend_name == "DePlotBackend"
+    assert result.raw_text == raw_output
+    assert result.table is not None
+    assert result.table.title == "Energy"
+    assert result.table.columns == ["Type", "Amount"]
+    assert result.table.rows == [["Solar", 150], ["Wind", 200]]
+    assert [(cell.row, cell.col, cell.value) for cell in result.table.triplets] == [
+        (0, "Type", "Solar"),
+        (0, "Amount", 150),
+        (1, "Type", "Wind"),
+        (1, "Amount", 200),
+    ]
+
+
+def test_deplot_formatter_parser_round_trip():
+    original = TableSchema(
+        title="Energy",
+        columns=["Type", "Amount"],
+        rows=[["Solar", 150], ["Wind", 200]],
+    )
+
+    serialized = to_linearized_deplot(original)
+    restored = parse_table_text(serialized, fmt="deplot")
+
+    assert restored.title == original.title
+    assert restored.rows == original.rows
+    assert [(cell.row, cell.value) for cell in restored.triplets] == [
+        (cell.row, cell.value) for cell in original.triplets
+    ]
+
+
+def test_deplot_backend_missing_image_is_isolated():
+    harness = VLMTableHarness(backend="deplot", target_format="deplot")
+
+    result = harness.extract_table()
+
+    assert result.parse_ok is False
+    assert result.table is None
+    assert result.backend_name == "DePlotBackend"
+    assert result.error_message == "Backend failure: DePlot extraction requires an image_path"
+
+
 def test_evaluator_and_error_categorization():
     """Verifies pipeline evaluation aggregations and error categorization."""
     gt = TableSchema(columns=["a", "b"], rows=[[1, 2], [3, 4]])
@@ -193,3 +249,21 @@ def test_evaluator_and_error_categorization():
     assert "mean_rms_f1" in summary
     assert "breakdown_by_chart_type" in summary
     assert "error_analysis" in summary
+
+def main():
+    test_normalization()
+    test_codeblock_stripping()
+    test_markdown_and_csv_parsers()
+    test_deplot_linearized_parser()
+    test_triplet_reconstruction()
+    test_metrics_computation()
+    test_synthetic_sanity_set()
+    test_vlm_table_harness()
+    test_deplot_formatter_parser_round_trip()
+    test_deplot_backend_missing_image_is_isolated()
+    test_evaluator_and_error_categorization()
+    print("Nhieu test qua neu hien dong nay la passed het !")
+
+
+if __name__ == "__main__":
+    main()
