@@ -1,0 +1,14 @@
+{
+    "id": "grouped_02",
+    "image": "grouped_02.png",
+    "gold_table": "grouped_02.csv",
+    "chart_type": "grouped_bar",
+    "n_categories": 6,
+    "n_series": 2,
+    "n_values": 12,
+    "dpi": 300,
+    "complexity": "medium",
+    "complexity_level": "medium",
+    "complexity_rule": "value_count_v1",
+    "label_source": "generator"
+}

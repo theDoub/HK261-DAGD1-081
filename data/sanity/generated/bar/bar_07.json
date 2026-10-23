@@ -1,0 +1,14 @@
+{
+    "id": "bar_07",
+    "image": "bar_07.png",
+    "gold_table": "bar_07.csv",
+    "chart_type": "bar",
+    "n_categories": 4,
+    "n_series": 1,
+    "n_values": 4,
+    "dpi": 300,
+    "complexity": "simple",
+    "complexity_level": "simple",
+    "complexity_rule": "value_count_v1",
+    "label_source": "generator"
+}
