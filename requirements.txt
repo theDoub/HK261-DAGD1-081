@@ -8,4 +8,4 @@ scipy
 torch
 transformers
 pillow
-pandas
+matplotlib
