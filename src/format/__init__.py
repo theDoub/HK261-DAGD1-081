@@ -9,6 +9,13 @@ from src.format.parser import (
     parse_table_text,
     strip_markdown_codeblocks,
 )
+
+from src.format.formatter import (
+    to_linearized_deplot,
+    to_markdown,
+    to_csv,
+)
+
 from src.format.schema import TableSchema, TableTriplet
 
 __all__ = [
@@ -21,4 +28,7 @@ __all__ = [
     "parse_csv_table",
     "parse_deplot_linearized",
     "parse_table_text",
+    "to_linearized_deplot",
+    "to_markdown",
+    "to_csv",
 ]
