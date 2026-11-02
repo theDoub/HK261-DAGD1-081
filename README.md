@@ -6,6 +6,60 @@ Based on the research paper **DePlot: One-shot visual language reasoning by plot
 
 ---
 
+## Getting Started
+
+Run commands from the repository root. Python dependencies, including the Gemini and Claude SDKs, are listed in `requirements.txt`.
+
+```powershell
+git clone https://github.com/theDoub/HK261-DAGD1-081.git
+cd HK261-DAGD1-081
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python main.py --help
+```
+
+On macOS/Linux, activate the environment with `source .venv/bin/activate` instead.
+
+### Extract a table from one image
+
+Pass one local PNG, JPG/JPEG, or WEBP image with `--image`. This mode does not require a dataset or ground-truth table; it prints the parsed Markdown table and raw model response. Add `--output` to save a JSON record containing the response, parse status, errors, and parsed table.
+
+```powershell
+python main.py --image "C:\charts\chart.png" --backend deplot --output "outputs\single\chart.json"
+```
+
+The default backend is DePlot. It may download model weights the first time it runs and requires internet access. Gemini and Claude use their respective hosted APIs; set the provider API key in the current PowerShell session before running:
+
+```powershell
+$env:GEMINI_API_KEY = "YOUR_GEMINI_API_KEY"
+python main.py --image "C:\charts\chart.png" --backend gemini --output "outputs\single\chart-gemini.json"
+
+$env:ANTHROPIC_API_KEY = "YOUR_ANTHROPIC_API_KEY"
+python main.py --image "C:\charts\chart.png" --backend claude --output "outputs\single\chart-claude.json"
+```
+
+For macOS/Linux shells, set the API key with `export GEMINI_API_KEY="YOUR_GEMINI_API_KEY"` or `export ANTHROPIC_API_KEY="YOUR_ANTHROPIC_API_KEY"` and pass an image path such as `./charts/chart.png`.
+
+The API keys are not stored in the repository or response cache. Hosted API requests may incur charges; a Claude chat subscription does not include Claude API usage. Gemini quotas and free-tier eligibility vary. Check the official [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) and [Anthropic API pricing](https://platform.claude.com/docs/en/about-claude/pricing) before making requests. Repeated requests use the local response cache by default; pass `--no-api-cache` to bypass cache reads and writes. The default cache directory is `.cache/chart_to_table/api_responses`.
+
+The configured models default to `google/deplot`, `gemini-2.5-flash`, and `claude-sonnet-4-6`; edit the relevant sections in `configs/config.yaml` to change them. Invalid images or unsuccessful extraction/parsing return a non-zero process exit code. For a hosted API call, the selected API key must be set; installing the SDK alone does not provide API access.
+
+### Evaluate the ChartQA dataset
+
+Dataset mode requires ChartQA files locally under `data/raw/ChartQA_Dataset/test` (images and paired tables). Select the split in `configs/config.yaml`:
+
+```powershell
+python main.py --chartqa --backend deplot
+python main.py --chartqa --backend gemini --max-samples 10
+python main.py --chartqa --backend claude --no-sample-limit
+```
+
+Gemini/Claude dataset runs are capped at 10 samples by default to limit API usage. `--max-samples N` selects a smaller or larger cap; `--no-sample-limit` explicitly evaluates all samples. DePlot evaluates all samples unless capped with `--max-samples`. Dataset predictions are written as JSONL files under `outputs/predictions/`. Hosted API keys and cache options are the same as for single-image mode.
+
+---
+
 ## Architecture & Module Boundaries (B1–B6)
 
 ```mermaid
@@ -16,7 +70,7 @@ flowchart TD
     end
 
     subgraph Extraction["Module B5: VLM Extraction Harness"]
-        BH["Pluggable Backends:\n- MockBackend\n- OpenVLMBackend\n- APIVLMBackend\n- DePlotBackend"]
+        BH["Pluggable Backends:\n- MockBackend\n- OpenVLMBackend\n- ClaudeVLMBackend\n- GeminiVLMBackend\n- DePlotBackend"]
         PR["Prompt Formatter (Markdown / Linearized)"]
         EH["Failure Isolation & Raw Text Logger"]
     end
@@ -48,7 +102,7 @@ flowchart TD
 | **B2** | `src/metrics/` | **Metrics**: Mathematical formulations for `RMS-F1` (Normalized Levenshtein header matching with threshold $\tau = 0.5$, relative value distance $D = \min(1, |p - t| / |t|)$, Hungarian matching assignment via `scipy.optimize.linear_sum_assignment`), `RNSS` (structural numerical similarity), and `Value-Recall@5%`. |
 | **B3** | `data/sanity/`, `src/data_loader/synthetic.py` | **Synthetic Sanity Set**: 6 diverse mock chart metadata and ground-truth tables (bar, line, grouped bar, horizontal bar, mixed complexity). |
 | **B4** | `src/data_loader/loader.py` | **Real Data Loader**: Ingestion layer pairing image paths with gold CSV files (ChartQA / PlotQA format), converting CSV into Module B1 canonical tables with missing-file error logging. |
-| **B5** | `src/models/harness.py` | **VLM Extraction Harness**: Pluggable backend architecture (`MockBackend`, `OpenVLMBackend`, `APIVLMBackend`, `DePlotBackend`), extraction prompt formatter, and isolated execution saving raw text and recording `parse_ok`. |
+| **B5** | `src/models/` | **VLM Extraction Harness**: `harness.py` contains the shared extraction contract; `claude.py` and `gemini.py` contain provider-specific API logic; `api_cache.py` provides shared persistent response caching. |
 | **B6** | `src/evaluation/evaluator.py` | **Evaluation & Error Analysis**: Evaluates extraction against gold tables, computes aggregations broken down by chart type and complexity, and categorizes failures into actionable error buckets (`numeric_error`, `header_mismatch`, `missing_data`, `structural_error`). |
 
 ### 1. Run Gate 1 (Week 4) Mandatory Tests
@@ -68,13 +122,34 @@ pytest tests/test_gate1_rms_f1.py -v
 ```bash
 pytest tests/ -v
 ```
-**Expected outcome:** `39 passed` across all modules (B1–B6).
+**Expected outcome:** All discovered tests pass across the pipeline and API backends. API tests use fake clients and do not send network requests.
 
 ### 4. Run End-to-End Pipeline Smoke Test
 ```bash
 python main.py
 ```
 Runs a complete mock run: loads synthetic charts, simulates extraction, parses tables, and computes metric breakdowns.
+
+### 5. Evaluate the Local ChartQA Test Split with DePlot
+```bash
+python main.py --chartqa
+```
+Runs the configured DePlot model on `data/raw/ChartQA_Dataset/test`, evaluates every chart image, and writes one JSONL record per sample under `outputs/predictions/`. Each record includes the image path, backend, unmodified model text, parse status, evaluation metrics, and any extraction or parsing error. The dataset must already be present locally; Transformers may download model weights if they are not cached.
+
+### 6. Evaluate ChartQA with Gemini or Claude
+Install the requirements, set the API key for the provider you intend to use, then explicitly select that backend:
+
+```powershell
+$env:GEMINI_API_KEY = "..."
+python main.py --chartqa --backend gemini
+
+$env:ANTHROPIC_API_KEY = "..."
+python main.py --chartqa --backend claude
+```
+
+The default hosted-API models are `gemini-2.5-flash` and `claude-sonnet-4-6`; edit `api_vlm` in `configs/config.yaml` to select other supported models. Keys are read from environment variables and are not written to the response cache. Hosted API runs are capped at 10 samples by default; set a different cap with `--max-samples 25`, or explicitly evaluate the full dataset with `--no-sample-limit`. `--no-api-cache` disables local cache reads and writes. Successful responses are cached under `.cache/chart_to_table/api_responses`, keyed by provider, model, prompt, and image content.
+
+**Billing notice:** Hosted model calls can incur provider charges. Gemini offers a limited free tier for eligible models and quotas; Claude API usage is billed separately from ordinary Claude chat subscriptions. Pricing and free-tier terms can change; consult the official [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) and [Anthropic API pricing](https://platform.claude.com/docs/en/about-claude/pricing) before running. The sample cap and local cache reduce repeated usage but are not a hard spending limit. Tests use mock clients and do not call paid APIs.
 
 ---
 
@@ -123,11 +198,12 @@ chart-to-table/
 │   ├── metrics/          # [Module B2] Evaluation metrics
 │   │   └── table_metrics.py # compute_rms_f1, compute_rnss, compute_value_recall_at_5
 │   ├── data_loader/      # [Modules B3 & B4] Synthetic & benchmark data loaders
-│   ├── models/           # [Module B5] VLM extraction harness (Mock, Open, API)
+│   ├── models/           # [Module B5] Shared harness, DePlot, Claude, Gemini, and shared API cache
 │   └── evaluation/       # [Module B6] Evaluator & error categorization
 ├── tests/
 │   ├── test_gate1_rms_f1.py # Gate 1 mandatory tests + RNSS & recall tests (19 tests)
-│   └── test_pipeline.py     # End-to-end integration tests (10 tests)
+│   ├── test_pipeline.py     # End-to-end integration tests (10 tests)
+│   └── test_api_backends.py # Offline hosted API backend/cache tests
 ├── data/
 │   └── sanity/           # Synthetic chart tables for testing
 ├── main.py               # Quick demo & smoke test
@@ -152,7 +228,10 @@ src/
 ├── metrics/
 ├── models/
 │   ├── __init__.py
+│   ├── api_cache.py
+│   ├── claude.py
 │   ├── deplot.py
+│   ├── gemini.py
 │   ├── harness.py
 │   └── vlm_client.py
 ├── __init__.py
@@ -175,8 +254,11 @@ The screenshot may show generated `__pycache__` directories as well. These are P
 | Module | Responsibility |
 |---|---|
 | `src/pipeline.py` | Public processing functions; coordinates extraction, parsing, and serialization. |
-| `src/models/harness.py` | Provides the table-extraction interface and connects a backend to the parser. |
+| `src/models/harness.py` | Provides the shared extraction interface and backend adapters. Claude/Gemini adapters lazily delegate to provider-specific harnesses. |
 | `src/models/deplot.py` | Wraps the DePlot model: image validation/loading, inference, and decoded text output. |
+| `src/models/claude.py` | Implements `ClaudeHarness`: Claude SDK requests, image handling, and response extraction. |
+| `src/models/gemini.py` | Implements `GeminiHarness`: Gemini SDK requests, image handling, and response extraction. |
+| `src/models/api_cache.py` | Provides persistent response caching shared by hosted API backends. |
 | `src/format/parser.py` | Converts raw DePlot text into structured table data. |
 | `src/format/schema.py` | Defines the canonical table representation and its table-related behavior. |
 | `src/format/formatter.py` | Serializes a canonical table into Linearized, Markdown, and CSV formats. |

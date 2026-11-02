@@ -1,9 +1,10 @@
 """Comprehensive Unit Tests for Modules B1 to B6."""
 
+import json
 from pathlib import Path
 import pytest
 
-from src.data_loader.loader import ChartDataLoader
+from src.data_loader.loader import ChartDataLoader, ChartDatasetItem
 from src.data_loader.synthetic import SyntheticSanitySet, load_synthetic_tables
 from src.evaluation.evaluator import PipelineEvaluator, categorize_error
 from src.format.parser import (
@@ -249,6 +250,59 @@ def test_evaluator_and_error_categorization():
     assert "mean_rms_f1" in summary
     assert "breakdown_by_chart_type" in summary
     assert "error_analysis" in summary
+
+
+def test_evaluator_writes_jsonl_and_continues_after_sample_failures(tmp_path):
+    image_paths = [
+        tmp_path / "success.png",
+        tmp_path / "backend-error.png",
+        tmp_path / "parse-error.png",
+    ]
+    raw_success = "TITLE | Example<0x0A>Category | Value<0x0A>one | 1"
+
+    def predict(image_path):
+        if image_path == image_paths[0]:
+            return raw_success
+        if image_path == image_paths[1]:
+            raise RuntimeError("model unavailable")
+        return "not a table"
+
+    harness = VLMTableHarness(
+        backend=DePlotBackend(predictor=predict),
+        target_format="deplot",
+    )
+    evaluator = PipelineEvaluator(harness=harness)
+    gold_table = TableSchema(columns=["category", "value"], rows=[["one", 1]])
+    dataset = [
+        ChartDatasetItem(id="success", image_path=image_paths[0], table=gold_table),
+        ChartDatasetItem(id="backend-error", image_path=image_paths[1], table=gold_table),
+        ChartDatasetItem(id="parse-error", image_path=image_paths[2], table=gold_table),
+    ]
+    predictions_path = tmp_path / "predictions" / "run.jsonl"
+
+    summary = evaluator.evaluate_dataset(dataset, predictions_path=predictions_path)
+    saved_records = [
+        json.loads(line)
+        for line in predictions_path.read_text(encoding="utf-8").splitlines()
+    ]
+
+    assert summary["total_samples"] == 3
+    assert [record["sample_id"] for record in saved_records] == [
+        "success",
+        "backend-error",
+        "parse-error",
+    ]
+    assert saved_records[0]["parse_ok"] is True
+    assert saved_records[0]["raw_text"] == raw_success
+    assert saved_records[0]["image_path"] == str(image_paths[0])
+    assert saved_records[0]["backend"] == "DePlotBackend"
+    assert saved_records[1]["parse_ok"] is False
+    assert saved_records[1]["raw_text"] == ""
+    assert "model unavailable" in saved_records[1]["error_message"]
+    assert saved_records[2]["parse_ok"] is False
+    assert saved_records[2]["raw_text"] == "not a table"
+    assert saved_records[2]["error_message"] is not None
+
 
 def main():
     test_normalization()

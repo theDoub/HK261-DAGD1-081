@@ -9,3 +9,5 @@ torch
 transformers
 pillow
 matplotlib
+anthropic>=0.40.0
+google-genai>=1.0.0
