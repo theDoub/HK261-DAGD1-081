@@ -102,7 +102,7 @@ flowchart TD
 | **B2** | `src/metrics/` | **Metrics**: Mathematical formulations for `RMS-F1` (Normalized Levenshtein header matching with threshold $\tau = 0.5$, relative value distance $D = \min(1, |p - t| / |t|)$, Hungarian matching assignment via `scipy.optimize.linear_sum_assignment`), `RNSS` (structural numerical similarity), and `Value-Recall@5%`. |
 | **B3** | `data/sanity/`, `src/data_loader/synthetic.py` | **Synthetic Sanity Set**: 6 diverse mock chart metadata and ground-truth tables (bar, line, grouped bar, horizontal bar, mixed complexity). |
 | **B4** | `src/data_loader/loader.py` | **Real Data Loader**: Ingestion layer pairing image paths with gold CSV files (ChartQA / PlotQA format), converting CSV into Module B1 canonical tables with missing-file error logging. |
-| **B5** | `src/models/` | **VLM Extraction Harness**: `harness.py` contains the shared extraction contract; `claude.py` and `gemini.py` contain provider-specific API logic; `api_cache.py` provides shared persistent response caching. |
+| **B5** | `src/models/`<br>*(including `harness.py`, `claude.py`, `gemini.py`, `api_cache.py`)* | **VLM Extraction Harness**: Shared extraction contract and execution runner (`harness.py`) featuring a pluggable backend architecture (`MockBackend`, local Transformers-backed `OpenVLMBackend` for Qwen2.5-VL, `APIVLMBackend`, `DePlotBackend`), provider-specific API logic (`claude.py`, `gemini.py`), persistent response caching (`api_cache.py`), extraction prompt formatters, and isolated execution tracking raw text and `parse_ok`. |
 | **B6** | `src/evaluation/evaluator.py` | **Evaluation & Error Analysis**: Evaluates extraction against gold tables, computes aggregations broken down by chart type and complexity, and categorizes failures into actionable error buckets (`numeric_error`, `header_mismatch`, `missing_data`, `structural_error`). |
 
 ### 1. Run Gate 1 (Week 4) Mandatory Tests
@@ -130,13 +130,25 @@ python main.py
 ```
 Runs a complete mock run: loads synthetic charts, simulates extraction, parses tables, and computes metric breakdowns.
 
-### 5. Evaluate the Local ChartQA Test Split with DePlot
+### 5. Run Real Qwen Inference on One Chart
+
+The `open_vlm` backend runs Qwen locally through Transformers. Install the project dependencies and a PyTorch build suitable for your hardware, then run:
+
+```bash
+python -m scripts.run_qwen --image data/raw/chart-for-test.jpg
+```
+
+The first run downloads the configured model (`Qwen/Qwen2.5-VL-7B-Instruct`) from Hugging Face. Configure the model, device, generation limit, and prompt in `configs/config.yaml` under `qwen`, or override the model/device/token limit with `--model`, `--device`, and `--max-new-tokens`. Device defaults to `auto` (CUDA when available, otherwise CPU). The 7B model requires substantial memory; CPU inference is supported but may be slow, and a smaller compatible Qwen2.5-VL checkpoint can be selected when resources are limited.
+
+The command prints the parsed Markdown table and exits with an error if inference or parsing fails. This verifies VLM extraction only; it does not calculate RMS-F1 because that requires a paired gold table. The default `python main.py` mock smoke test is unchanged.
+
+### 6. Evaluate the Local ChartQA Test Split with DePlot
 ```bash
 python main.py --chartqa
 ```
 Runs the configured DePlot model on `data/raw/ChartQA_Dataset/test`, evaluates every chart image, and writes one JSONL record per sample under `outputs/predictions/`. Each record includes the image path, backend, unmodified model text, parse status, evaluation metrics, and any extraction or parsing error. The dataset must already be present locally; Transformers may download model weights if they are not cached.
 
-### 6. Evaluate ChartQA with Gemini or Claude
+### 7. Evaluate ChartQA with Gemini or Claude
 Install the requirements, set the API key for the provider you intend to use, then explicitly select that backend:
 
 ```powershell
@@ -150,6 +162,7 @@ python main.py --chartqa --backend claude
 The default hosted-API models are `gemini-2.5-flash` and `claude-sonnet-4-6`; edit `api_vlm` in `configs/config.yaml` to select other supported models. Keys are read from environment variables and are not written to the response cache. Hosted API runs are capped at 10 samples by default; set a different cap with `--max-samples 25`, or explicitly evaluate the full dataset with `--no-sample-limit`. `--no-api-cache` disables local cache reads and writes. Successful responses are cached under `.cache/chart_to_table/api_responses`, keyed by provider, model, prompt, and image content.
 
 **Billing notice:** Hosted model calls can incur provider charges. Gemini offers a limited free tier for eligible models and quotas; Claude API usage is billed separately from ordinary Claude chat subscriptions. Pricing and free-tier terms can change; consult the official [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) and [Anthropic API pricing](https://platform.claude.com/docs/en/about-claude/pricing) before running. The sample cap and local cache reduce repeated usage but are not a hard spending limit. Tests use mock clients and do not call paid APIs.
+=======
 
 ---
 
