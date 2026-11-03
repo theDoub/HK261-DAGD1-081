@@ -2,10 +2,11 @@
 
 Provides a pluggable backend architecture for extracting tables from chart images:
 - MockBackend: For deterministic offline testing and sanity verification.
-- OpenVLMBackend: Stub for open-source vision models (e.g. Qwen2.5-VL, DePlot).
+- OpenVLMBackend: Local open-source vision models (e.g. Qwen2.5-VL).
+- DePlotBackend: Google DePlot chart-to-table model.
 - APIVLMBackend: Stub for hosted APIs (e.g. Gemini, Claude) with lightweight caching.
 
-Features robust error handling (saves raw text, records parse_ok flag, isolates sample failures).
+Features robust error handling, records parse status, and isolates sample failures.
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from dataclasses import dataclass, field
 import hashlib
 import json
 import logging
+import gc
+import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Union
 
@@ -72,20 +75,163 @@ class MockBackend(BaseExtractionBackend):
 
 
 class OpenVLMBackend(BaseExtractionBackend):
-    """Stub harness for local open-source vision-language models (e.g. Qwen2.5-VL, DePlot)."""
+    """Local Transformers backend optimized for limited-VRAM GPUs."""
 
-    def __init__(self, model_name: str = "Qwen/Qwen2.5-VL-7B-Instruct") -> None:
+    DEFAULT_MODEL_NAME = "Qwen/Qwen2.5-VL-7B-Instruct"
+
+    def __init__(
+        self,
+        model_name: str = DEFAULT_MODEL_NAME,
+        device: str = "auto",
+        max_new_tokens: int = 256,
+        quantization: str = "4bit",
+    ) -> None:
+        if max_new_tokens <= 0:
+            raise ValueError("max_new_tokens must be greater than zero")
+        if quantization not in {"none", "4bit"}:
+            raise ValueError("quantization must be either 'none' or '4bit'")
         self.model_name = model_name
+        self.device = device
+        self.max_new_tokens = max_new_tokens
+        self.quantization = quantization
+        self._processor: Any = None
+        self._model: Any = None
 
-    def generate(self, prompt: str, image_path: Optional[Union[str, Path]] = None) -> str:
-        """Stub generation simulating local open VLM output."""
-        logger.info("Simulating local Open VLM generation with model: %s", self.model_name)
-        return (
-            "| Category | Value A | Value B |\n"
-            "|---|---|---|\n"
-            "| Alpha | 45.2 | 30.1 |\n"
-            "| Beta | 52.8 | 61.4 |"
+    def _load_model(self) -> None:
+        """Load the model once using a GPU-memory-conscious configuration."""
+        import torch
+        from transformers import (
+            AutoProcessor,
+            Qwen2_5_VLForConditionalGeneration,
         )
+
+        if self.device == "auto":
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+        else:
+            device = self.device
+        if device.startswith("cuda") and not torch.cuda.is_available():
+            raise RuntimeError(
+                f"CUDA device '{device}' requested, but CUDA is unavailable"
+            )
+        if self.quantization == "4bit" and not device.startswith("cuda"):
+            raise ValueError(
+                "4-bit quantization requires a supported CUDA setup. "
+                "Use quantization='none' for CPU inference."
+            )
+        logger.info("Loading processor: %s", self.model_name)
+        processor = AutoProcessor.from_pretrained(self.model_name)
+        model_kwargs = {
+            "low_cpu_mem_usage": True,
+        }
+        if device.startswith("cuda"):
+            model_kwargs["torch_dtype"] = torch.float16
+            model_kwargs["device_map"] = {"": 0}
+            if self.quantization == "4bit":
+                from transformers import BitsAndBytesConfig
+
+                model_kwargs["quantization_config"] = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_use_double_quant=True,
+                )
+        else:
+            model_kwargs["torch_dtype"] = torch.float32
+        logger.info(
+            "Loading model: %s | device=%s | quantization=%s",
+            self.model_name,
+            device,
+            self.quantization,
+        )
+        start = time.perf_counter()
+        model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
+            self.model_name,
+            **model_kwargs,
+        )
+        if not self.quantization == "4bit" or not device.startswith("cuda"):
+            model.to(device)
+        model.eval()
+        self._processor = processor
+        self._model = model
+        self.device = device
+        elapsed = time.perf_counter() - start
+        logger.info("Model loaded in %.2f seconds", elapsed)
+        if device.startswith("cuda"):
+            logger.info(
+                "GPU allocated memory after loading: %.2f GiB",
+                torch.cuda.memory_allocated() / (1024**3),
+            )
+
+    def generate(
+        self,
+        prompt: str,
+        image_path: Optional[Union[str, Path]] = None,
+    ) -> str:
+        """Run inference on one image and return the generated response."""
+        if image_path is None:
+            raise ValueError("Open VLM extraction requires an image_path")
+        image_path = Path(image_path)
+        if not image_path.is_file():
+            raise FileNotFoundError(f"Image not found: {image_path}")
+        if self._model is None or self._processor is None:
+            self._load_model()
+        import torch
+        from PIL import Image
+
+        start = time.perf_counter()
+        inputs = None
+        generated_ids = None
+        try:
+            with Image.open(image_path) as image:
+                image_rgb = image.convert("RGB")
+                messages = [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "image", "image": image_rgb},
+                            {"type": "text", "text": prompt},
+                        ],
+                    }
+                ]
+            text = self._processor.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            inputs = self._processor(
+                text=[text],
+                images=[image_rgb],
+                padding=True,
+                return_tensors="pt",
+            )
+            inputs = inputs.to(self.device)
+            with torch.inference_mode():
+                generated_ids = self._model.generate(
+                    **inputs,
+                    max_new_tokens=self.max_new_tokens,
+                    do_sample=False,
+                    use_cache=True,
+                )
+            prompt_length = inputs["input_ids"].shape[1]
+            response_ids = generated_ids[:, prompt_length:]
+            result = self._processor.batch_decode(
+                response_ids,
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )[0].strip()
+            if self.device.startswith("cuda"):
+                torch.cuda.synchronize()
+            logger.info(
+                "Inference completed in %.2f seconds",
+                time.perf_counter() - start,
+            )
+            return result
+        finally:
+            del inputs
+            del generated_ids
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
 
 class DePlotBackend(BaseExtractionBackend):

@@ -48,7 +48,7 @@ flowchart TD
 | **B2** | `src/metrics/` | **Metrics**: Mathematical formulations for `RMS-F1` (Normalized Levenshtein header matching with threshold $\tau = 0.5$, relative value distance $D = \min(1, |p - t| / |t|)$, Hungarian matching assignment via `scipy.optimize.linear_sum_assignment`), `RNSS` (structural numerical similarity), and `Value-Recall@5%`. |
 | **B3** | `data/sanity/`, `src/data_loader/synthetic.py` | **Synthetic Sanity Set**: 6 diverse mock chart metadata and ground-truth tables (bar, line, grouped bar, horizontal bar, mixed complexity). |
 | **B4** | `src/data_loader/loader.py` | **Real Data Loader**: Ingestion layer pairing image paths with gold CSV files (ChartQA / PlotQA format), converting CSV into Module B1 canonical tables with missing-file error logging. |
-| **B5** | `src/models/harness.py` | **VLM Extraction Harness**: Pluggable backend architecture (`MockBackend`, `OpenVLMBackend`, `APIVLMBackend`, `DePlotBackend`), extraction prompt formatter, and isolated execution saving raw text and recording `parse_ok`. |
+| **B5** | `src/models/harness.py` | **VLM Extraction Harness**: Pluggable backend architecture (`MockBackend`, local Transformers-backed `OpenVLMBackend` for Qwen2.5-VL, `APIVLMBackend`, and `DePlotBackend`), extraction prompt formatter, and isolated execution recording raw text and `parse_ok`. |
 | **B6** | `src/evaluation/evaluator.py` | **Evaluation & Error Analysis**: Evaluates extraction against gold tables, computes aggregations broken down by chart type and complexity, and categorizes failures into actionable error buckets (`numeric_error`, `header_mismatch`, `missing_data`, `structural_error`). |
 
 ### 1. Run Gate 1 (Week 4) Mandatory Tests
@@ -75,6 +75,18 @@ pytest tests/ -v
 python main.py
 ```
 Runs a complete mock run: loads synthetic charts, simulates extraction, parses tables, and computes metric breakdowns.
+
+### 5. Run Real Qwen Inference on One Chart
+
+The `open_vlm` backend runs Qwen locally through Transformers. Install the project dependencies and a PyTorch build suitable for your hardware, then run:
+
+```bash
+python -m scripts.run_qwen --image data/raw/chart-for-test.jpg
+```
+
+The first run downloads the configured model (`Qwen/Qwen2.5-VL-7B-Instruct`) from Hugging Face. Configure the model, device, generation limit, and prompt in `configs/config.yaml` under `qwen`, or override the model/device/token limit with `--model`, `--device`, and `--max-new-tokens`. Device defaults to `auto` (CUDA when available, otherwise CPU). The 7B model requires substantial memory; CPU inference is supported but may be slow, and a smaller compatible Qwen2.5-VL checkpoint can be selected when resources are limited.
+
+The command prints the parsed Markdown table and exits with an error if inference or parsing fails. This verifies VLM extraction only; it does not calculate RMS-F1 because that requires a paired gold table. The default `python main.py` mock smoke test is unchanged.
 
 ---
 
