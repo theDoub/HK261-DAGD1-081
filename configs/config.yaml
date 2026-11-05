@@ -18,6 +18,15 @@ deplot:
   max_new_tokens: 512
   prompt: "Generate underlying data table of the figure below:"
 
+# Module B5: Hosted vision API backends. API keys are read from environment.
+api_vlm:
+  sample_limit: 10
+  cache_enabled: true
+  cache_dir: ".cache/chart_to_table/api_responses"
+  gemini:
+    model_name: "gemini-2.5-flash"
+  claude:
+    model_name: "claude-sonnet-4-6"
 # Local Qwen vision-language extraction backend
 qwen:
   model_name_or_path: "Qwen/Qwen2.5-VL-7B-Instruct"

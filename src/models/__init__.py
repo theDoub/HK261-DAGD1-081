@@ -1,10 +1,11 @@
 """Module B5: Vision-Language Model Extraction Harness and Backends."""
 
 from src.models.harness import (
-    APIVLMBackend,
     BaseExtractionBackend,
+    ClaudeVLMBackend,
     DePlotBackend,
     ExtractionResult,
+    GeminiVLMBackend,
     MockBackend,
     OpenVLMBackend,
     VLMTableHarness,
@@ -17,7 +18,8 @@ __all__ = [
     "DePlotBackend",
     "MockBackend",
     "OpenVLMBackend",
-    "APIVLMBackend",
+    "ClaudeVLMBackend",
+    "GeminiVLMBackend",
     "ExtractionResult",
 ]
 

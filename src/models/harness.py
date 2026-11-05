@@ -2,9 +2,9 @@
 
 Provides a pluggable backend architecture for extracting tables from chart images:
 - MockBackend: For deterministic offline testing and sanity verification.
+- Hosted provider backends are implemented in dedicated modules.
 - OpenVLMBackend: Local open-source vision models (e.g. Qwen2.5-VL).
 - DePlotBackend: Google DePlot chart-to-table model.
-- APIVLMBackend: Stub for hosted APIs (e.g. Gemini, Claude) with lightweight caching.
 
 Features robust error handling, records parse status, and isolates sample failures.
 """
@@ -13,8 +13,6 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-import hashlib
-import json
 import logging
 import gc
 import time
@@ -244,6 +242,7 @@ class DePlotBackend(BaseExtractionBackend):
     ) -> None:
         self._predictor = predictor
         self._model_kwargs = model_kwargs
+        self._initialization_error: Optional[str] = None
 
     def generate(self, prompt: str, image_path: Optional[Union[str, Path]] = None) -> str:
         """Runs DePlot on an image, loading the model only when first needed."""
@@ -251,45 +250,135 @@ class DePlotBackend(BaseExtractionBackend):
             raise ValueError("DePlot extraction requires an image_path")
 
         if self._predictor is None:
-            from src.models.deplot import DePlotHarness
+            if self._initialization_error is not None:
+                raise RuntimeError(
+                    f"DePlot model initialization failed: {self._initialization_error}"
+                )
 
-            model = DePlotHarness(**self._model_kwargs)
+            try:
+                from src.models.deplot import DePlotHarness
+
+                model = DePlotHarness(**self._model_kwargs)
+            except Exception as error:
+                self._initialization_error = str(error) or type(error).__name__
+                raise
             self._predictor = model.predict
 
         return self._predictor(image_path)
 
 
-class APIVLMBackend(BaseExtractionBackend):
-    """Stub harness for hosted vision APIs (e.g. Gemini 2.5, Claude 3.7) with in-memory caching."""
+class ClaudeVLMBackend(BaseExtractionBackend):
+    """Lazy adapter that delegates extraction to the Claude-specific harness."""
 
-    def __init__(self, model_name: str = "gemini-2.5-flash", cache_dir: Optional[Path] = None) -> None:
-        self.model_name = model_name
-        self.cache_dir = cache_dir
-        self._memory_cache: Dict[str, str] = {}
+    DEFAULT_MODEL = "claude-sonnet-4-6"
 
-    def _get_cache_key(self, prompt: str, image_path: Optional[Union[str, Path]]) -> str:
-        raw_key = f"{self.model_name}_{prompt}_{str(image_path)}"
-        return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
+    def __init__(
+        self,
+        model_name: Optional[str] = None,
+        cache_dir: Optional[Union[str, Path]] = None,
+        *,
+        cache_enabled: bool = True,
+        api_key: Optional[str] = None,
+        client: Any = None,
+        harness_factory: Optional[Callable[..., Any]] = None,
+    ) -> None:
+        self._harness_factory = harness_factory
+        self._harness_kwargs: Dict[str, Any] = {
+            "model_name": model_name or self.DEFAULT_MODEL,
+            "cache_dir": cache_dir,
+            "cache_enabled": cache_enabled,
+            "api_key": api_key,
+            "client": client,
+        }
+        self._harness: Optional[Any] = None
+        self._initialization_error: Optional[str] = None
 
-    def generate(self, prompt: str, image_path: Optional[Union[str, Path]] = None) -> str:
-        """Queries the API with basic response caching."""
-        cache_key = self._get_cache_key(prompt, image_path)
-        if cache_key in self._memory_cache:
-            logger.debug("Cache hit for API VLM query: %s", cache_key)
-            return self._memory_cache[cache_key]
+    @property
+    def backend_name(self) -> str:
+        return "ClaudeVLMBackend"
 
-        logger.info("Executing API VLM call [%s] for image: %s", self.model_name, image_path)
-        # Stub response simulating an API VLM answer
-        result = (
-            "```markdown\n"
-            "| Region | Solar | Wind |\n"
-            "|---|---|---|\n"
-            "| North | 120 | 180 |\n"
-            "| South | 95 | 110 |\n"
-            "```"
-        )
-        self._memory_cache[cache_key] = result
-        return result
+    def generate(
+        self,
+        prompt: str,
+        image_path: Optional[Union[str, Path]] = None,
+    ) -> str:
+        if image_path is None:
+            raise ValueError("Claude extraction requires an image_path")
+        if self._initialization_error is not None:
+            raise RuntimeError(
+                f"Claude harness initialization failed: {self._initialization_error}"
+            )
+
+        if self._harness is None:
+            try:
+                factory = self._harness_factory
+                if factory is None:
+                    from src.models.claude import ClaudeHarness
+
+                    factory = ClaudeHarness
+                self._harness = factory(**self._harness_kwargs)
+            except Exception as error:
+                self._initialization_error = str(error) or type(error).__name__
+                raise
+
+        return self._harness.generate(prompt, image_path)
+
+
+class GeminiVLMBackend(BaseExtractionBackend):
+    """Lazy adapter that delegates extraction to the Gemini-specific harness."""
+
+    DEFAULT_MODEL = "gemini-2.5-flash"
+
+    def __init__(
+        self,
+        model_name: Optional[str] = None,
+        cache_dir: Optional[Union[str, Path]] = None,
+        *,
+        cache_enabled: bool = True,
+        api_key: Optional[str] = None,
+        client: Any = None,
+        harness_factory: Optional[Callable[..., Any]] = None,
+    ) -> None:
+        self._harness_factory = harness_factory
+        self._harness_kwargs: Dict[str, Any] = {
+            "model_name": model_name or self.DEFAULT_MODEL,
+            "cache_dir": cache_dir,
+            "cache_enabled": cache_enabled,
+            "api_key": api_key,
+            "client": client,
+        }
+        self._harness: Optional[Any] = None
+        self._initialization_error: Optional[str] = None
+
+    @property
+    def backend_name(self) -> str:
+        return "GeminiVLMBackend"
+
+    def generate(
+        self,
+        prompt: str,
+        image_path: Optional[Union[str, Path]] = None,
+    ) -> str:
+        if image_path is None:
+            raise ValueError("Gemini extraction requires an image_path")
+        if self._initialization_error is not None:
+            raise RuntimeError(
+                f"Gemini harness initialization failed: {self._initialization_error}"
+            )
+
+        if self._harness is None:
+            try:
+                factory = self._harness_factory
+                if factory is None:
+                    from src.models.gemini import GeminiHarness
+
+                    factory = GeminiHarness
+                self._harness = factory(**self._harness_kwargs)
+            except Exception as error:
+                self._initialization_error = str(error) or type(error).__name__
+                raise
+
+        return self._harness.generate(prompt, image_path)
 
 
 class VLMTableHarness:
@@ -303,7 +392,7 @@ class VLMTableHarness:
         """Initializes the harness.
 
         Args:
-            backend: Backend instance or name ('mock', 'open_vlm', 'api_vlm', 'deplot').
+            backend: Backend instance or name ('mock', 'open_vlm', 'gemini', 'claude', 'deplot').
             target_format: Expected output format ('markdown' or 'deplot').
         """
         self.target_format = target_format
@@ -313,8 +402,10 @@ class VLMTableHarness:
             self.backend = DePlotBackend()
         elif backend == "open_vlm":
             self.backend = OpenVLMBackend()
-        elif backend == "api_vlm":
-            self.backend = APIVLMBackend()
+        elif backend == "gemini":
+            self.backend = GeminiVLMBackend()
+        elif backend == "claude":
+            self.backend = ClaudeVLMBackend()
         else:
             self.backend = MockBackend()
 
@@ -345,7 +436,9 @@ class VLMTableHarness:
             ExtractionResult: Complete record containing raw text, parsed table, and parse_ok flag.
         """
         active_prompt = prompt or self.format_prompt()
-        backend_name = self.backend.__class__.__name__
+        backend_name = getattr(
+            self.backend, "backend_name", self.backend.__class__.__name__
+        )
 
         try:
             raw_text = self.backend.generate(active_prompt, image_path)

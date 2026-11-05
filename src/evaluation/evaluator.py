@@ -7,11 +7,13 @@ and categorizes extraction errors for error analysis.
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Sequence, Union
 import yaml
 
+from src.data_loader.loader import ChartDatasetItem
 from src.format.schema import TableSchema
 from src.metrics.table_metrics import (
     compute_rms_f1,
@@ -89,14 +91,16 @@ class PipelineEvaluator:
 
     def evaluate_sample(
         self,
-        gt_table: TableSchema,
+        gt_table: Optional[TableSchema],
         image_path: Optional[Union[str, Path]] = None,
+        sample_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Evaluates extraction on a single chart sample against gold table.
 
         Args:
-            gt_table: Ground-truth TableSchema.
+            gt_table: Ground-truth TableSchema, if available.
             image_path: Optional path to chart image.
+            sample_id: Dataset identifier to preserve in the evaluation record.
 
         Returns:
             Dict[str, Any]: Single sample evaluation record.
@@ -106,7 +110,7 @@ class PipelineEvaluator:
         pred_table = extract_res.table
 
         # Step 2: Compute Metrics (Module B2)
-        if pred_table and extract_res.parse_ok:
+        if gt_table is not None and pred_table and extract_res.parse_ok:
             rms = compute_rms_f1(pred_table, gt_table)
             rnss = compute_rnss(pred_table, gt_table)
             val_recall = compute_value_recall_at_5(pred_table, gt_table)
@@ -116,13 +120,21 @@ class PipelineEvaluator:
             val_recall = 0.0
 
         # Step 3: Categorize Error
-        error_bucket = categorize_error(pred_table, gt_table, rms["f1"])
+        error_bucket = (
+            categorize_error(pred_table, gt_table, rms["f1"])
+            if gt_table is not None
+            else "missing_data"
+        )
 
-        meta = gt_table.metadata or {}
+        meta = gt_table.metadata if gt_table is not None else {}
         return {
-            "sample_id": meta.get("id", "sample"),
+            "sample_id": sample_id or meta.get("id", "sample"),
+            "image_path": str(image_path) if image_path is not None else None,
+            "backend": extract_res.backend_name,
+            "raw_text": extract_res.raw_text,
             "chart_type": meta.get("chart_type", "unknown"),
             "complexity": meta.get("complexity", "unknown"),
+            "ground_truth_available": gt_table is not None,
             "parse_ok": extract_res.parse_ok,
             "precision": rms["precision"],
             "recall": rms["recall"],
@@ -133,11 +145,16 @@ class PipelineEvaluator:
             "error_message": extract_res.error_message,
         }
 
-    def evaluate_dataset(self, dataset: List[TableSchema]) -> Dict[str, Any]:
+    def evaluate_dataset(
+        self,
+        dataset: Sequence[Union[TableSchema, ChartDatasetItem]],
+        predictions_path: Optional[Union[str, Path]] = None,
+    ) -> Dict[str, Any]:
         """Runs full evaluation across a collection of tables, computing breakdowns by type and complexity.
 
         Args:
-            dataset: List of ground-truth TableSchema instances.
+            dataset: Ground-truth tables or chart dataset items containing image paths.
+            predictions_path: Optional JSONL file to write one extraction record per item.
 
         Returns:
             Dict[str, Any]: Aggregated summary and error analysis.
@@ -145,9 +162,34 @@ class PipelineEvaluator:
         records: List[Dict[str, Any]] = []
         total = len(dataset)
 
-        for gt_table in dataset:
-            record = self.evaluate_sample(gt_table)
-            records.append(record)
+        output_path = Path(predictions_path) if predictions_path is not None else None
+        if output_path is not None:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        output_file = (
+            output_path.open("w", encoding="utf-8", newline="\n")
+            if output_path is not None
+            else None
+        )
+        try:
+            for sample in dataset:
+                if isinstance(sample, ChartDatasetItem):
+                    gt_table = sample.table
+                    image_path = sample.image_path
+                    sample_id = sample.id
+                else:
+                    gt_table = sample
+                    image_path = None
+                    sample_id = None
+
+                record = self.evaluate_sample(gt_table, image_path, sample_id)
+                records.append(record)
+                if output_file is not None:
+                    output_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    output_file.flush()
+        finally:
+            if output_file is not None:
+                output_file.close()
 
         if total == 0:
             return {"total_samples": 0, "mean_rms_f1": 0.0}
