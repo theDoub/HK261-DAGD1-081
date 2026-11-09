@@ -56,6 +56,7 @@ data/raw/*
 !data/raw/.gitkeep
 data/processed/*
 !data/processed/.gitkeep
+data/chartqa_test/
 
 # Unit test / coverage reports
 htmlcov/
