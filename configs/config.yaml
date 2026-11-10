@@ -138,6 +138,59 @@ qwen:
     - Ensure the table has a consistent number of columns.
     - Verify that the table orientation is consistent with the chart structure before producing the final output.
 
+    ### Header Normalization and Unit Handling
+
+    Column headers must represent the original data
+    dimensions or series names, not their measurement units.
+
+    Follow these rules:
+
+    1. Preserve the original category, entity, and series names.
+
+    2. Do NOT automatically append measurement units
+      to column headers.
+
+    3. Do NOT append percentage symbols such as (%)
+      to headers like:
+      - Dissatisfied
+      - Satisfied
+      - Employed
+      - Unemployed
+
+    4. Do NOT combine chart titles, subtitles, or
+      descriptive information with column headers.
+
+    5. If measurement units are displayed in the chart,
+      understand and preserve their meaning during
+      numerical extraction, but do not unnecessarily
+      include them in column names.
+
+    6. Use concise and consistent headers.
+
+    7. When a chart provides explicit series names,
+      use those names directly without adding
+      explanatory descriptions.
+
+    Examples:
+
+    Incorrect:
+    | Year | Dissatisfied (%) | Satisfied (%) |
+
+    Correct:
+    | Year | Dissatisfied | Satisfied |
+
+    Incorrect:
+    | Country | Population (Million) |
+
+    Correct:
+    | Country | Population |
+
+    Incorrect:
+    | Year | Revenue (USD) |
+
+    Correct:
+    | Year | Revenue |
+
 # Module B2 & B6: Metrics & Evaluation
 evaluation:
   metrics:
