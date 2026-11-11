@@ -8,6 +8,7 @@ from types import ModuleType
 from PIL import Image
 import pytest
 
+import main as cli
 from src.models.harness import OpenVLMBackend, VLMTableHarness
 
 
@@ -200,3 +201,62 @@ def test_open_vlm_cuda_unavailable_is_reported_by_harness(tmp_path, monkeypatch)
     assert result.error_message == (
         "Backend failure: CUDA device 'cuda' requested, but CUDA is not available"
     )
+
+
+def test_qwen_cli_harness_uses_configured_backend_settings(monkeypatch, tmp_path):
+    captured = {}
+
+    class FakeOpenVLMBackend:
+        DEFAULT_MODEL_NAME = OpenVLMBackend.DEFAULT_MODEL_NAME
+
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setattr(
+        "src.models.harness.OpenVLMBackend",
+        FakeOpenVLMBackend,
+    )
+    harness = cli.build_extraction_harness(
+        "qwen",
+        {
+            "qwen": {
+                "model_name_or_path": "test/qwen-model",
+                "device": "cuda:0",
+                "max_new_tokens": 123,
+                "quantization": "none",
+                "prompt": "Extract chart values.",
+            }
+        },
+        tmp_path,
+    )
+
+    assert captured == {
+        "model_name": "test/qwen-model",
+        "device": "cuda:0",
+        "max_new_tokens": 123,
+        "quantization": "none",
+    }
+    assert isinstance(harness.backend, FakeOpenVLMBackend)
+    assert harness.target_format == "markdown"
+    assert harness.format_prompt() == "Extract chart values."
+
+
+def test_cli_accepts_qwen_backend_for_single_image(monkeypatch, tmp_path):
+    received = {}
+
+    def fake_run_single_image(**kwargs):
+        received.update(kwargs)
+        return True
+
+    monkeypatch.setattr(cli, "run_single_image", fake_run_single_image)
+
+    assert cli.main(
+        ["--image", str(tmp_path / "chart.png"), "--backend", "qwen"]
+    ) == 0
+    assert received["backend_name"] == "qwen"
+
+
+def test_vlm_harness_accepts_qwen_backend_alias():
+    harness = VLMTableHarness(backend="qwen")
+
+    assert isinstance(harness.backend, OpenVLMBackend)
