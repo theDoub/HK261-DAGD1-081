@@ -27,6 +27,7 @@ api_vlm:
     model_name: "gemini-2.5-flash"
   claude:
     model_name: "claude-sonnet-4-6"
+
 # Local Qwen vision-language extraction backend
 qwen:
   model_name_or_path: "Qwen/Qwen2.5-VL-7B-Instruct"
@@ -37,6 +38,29 @@ qwen:
     Extract all numerical values and categories from this chart into a clean
     GitHub-Flavored Markdown table.
     Output only the markdown table without conversational explanation.
+    When converting a chart into a table:
+
+    1. Identify the chart type and its data organization
+      before constructing the table.
+
+    2. For multi-series charts:
+      - Use one row for each data series.
+      - Use the series name as the first-column label.
+      - Use the category or time points as column headers.
+
+    3. For single-series charts:
+      - Use one row for each category.
+      - Use the category labels as the first column.
+
+    4. Preserve the original meaning of all headers.
+      Do not invent or replace column names with unrelated
+      generic labels.
+
+    5. Preserve units and labels when they are explicitly
+      provided in the chart.
+
+    6. Do not add explanations or descriptions.
+      Output only the extracted table in Markdown format.
 
 # Module B2 & B6: Metrics & Evaluation
 evaluation:
