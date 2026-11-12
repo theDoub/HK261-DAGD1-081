@@ -24,29 +24,9 @@ api_vlm:
   cache_enabled: true
   cache_dir: ".cache/chart_to_table/api_responses"
   gemini:
-    model_name: "gemini-1.5-flash"
-    prompt: >
-      Extract all numerical values and categories from this chart into a clean GitHub-Flavored Markdown table.
-      Output ONLY the markdown table without any explanation, markdown code fence tags, or conversational preamble.
-      Follow these chart-to-table rules:
-      1. For multi-series charts (e.g. line charts, grouped bars):
-         - Use one row for each data series.
-         - The series name must be the first-column label.
-         - The time points or x-axis categories must be column headers.
-      2. For single-series charts:
-         - Use one row for each category.
-         - The category names must be in the first column.
-      3. Match visual colors in the legend to identify series names accurately.
-      4. Preserve exact numbers and original metric headers.
+    model_name: "gemini-2.5-flash"
   claude:
-    model_name: "claude-3-5-sonnet-20241022"
-    prompt: >
-      Extract all numerical data from this chart into a GitHub-Flavored Markdown table.
-      Return ONLY the raw markdown table. Do not include markdown code block syntax (no ```), greetings, or notes.
-      Formatting guidelines:
-      1. Multi-series charts: Each row corresponds to a series (first column = series name); column headers correspond to x-axis time points/categories.
-      2. Single-series charts: First column contains category names; second column contains values.
-      3. Keep numbers accurate and preserve headers as depicted.
+    model_name: "claude-sonnet-4-6"
 
 # Local Qwen vision-language extraction backend
 qwen:
@@ -55,32 +35,161 @@ qwen:
   max_new_tokens: 256
   quantization: "4bit"
   prompt: >
-    Extract all numerical values and categories from this chart into a clean
-    GitHub-Flavored Markdown table.
-    Output only the markdown table without conversational explanation.
-    When converting a chart into a table:
+    You are an expert chart-to-table extraction model.
 
-    1. Identify the chart type and its data organization
-      before constructing the table.
+    Your task is to accurately extract all data from the given chart and convert it into a structured Markdown table.
 
-    2. For multi-series charts:
-      - Use one row for each data series.
-      - Use the series name as the first-column label.
-      - Use the category or time points as column headers.
+    Follow the instructions below carefully.
 
-    3. For single-series charts:
-      - Use one row for each category.
-      - Use the category labels as the first column.
+    ### 1. Understand the Chart Structure
 
-    4. Preserve the original meaning of all headers.
-      Do not invent or replace column names with unrelated
-      generic labels.
+    Before extracting data, identify:
 
-    5. Preserve units and labels when they are explicitly
-      provided in the chart.
+    - Chart type (line chart, bar chart, grouped bar chart, stacked bar chart, etc.).
+    - X-axis categories or time points.
+    - Y-axis measurement and unit.
+    - Data series represented by legends or direct labels.
+    - Whether the chart contains a single series or multiple series.
 
-    6. Do not add explanations or descriptions.
-      Output only the extracted table in Markdown format.
+    ### 2. Table Orientation Rules
+
+    Choosing the correct table orientation is critical.
+
+    **A. Multi-series Line Charts**
+
+    For line charts containing multiple data series:
+
+    - Each data series MUST be represented as one row.
+    - The first column MUST be named `entity`.
+    - Each subsequent column MUST represent one X-axis category or time point.
+    - Use the series name as the value in the `entity` column.
+    - Do NOT use years or X-axis categories as the first-column values.
+    - Do NOT represent each data series as a separate column.
+
+    Example:
+
+    For a chart containing four series (Myanmar, Zambia, New Zealand, and Thailand) across multiple years:
+
+    | entity | 2005 | 2006 | 2007 | 2008 |
+    |---|---|---|---|---|
+    | Myanmar | 56 | 55 | 54 | 53 |
+    | Zambia | 27 | 27 | 26 | 26 |
+    | New Zealand | 14 | 13 | 13 | 13 |
+    | Thailand | 10 | 11 | 12 | 13 |
+
+    **B. Single-series Charts**
+
+    For charts containing only one data series:
+
+    - Represent each X-axis category as one row.
+    - Use the category or time point as the first-column value.
+    - Use an appropriate measurement header for the second column.
+
+    Example:
+
+    | year | value |
+    |---|---:|
+    | 2005 | 56 |
+    | 2006 | 55 |
+    | 2007 | 54 |
+
+    **C. Grouped and Stacked Bar Charts**
+
+    For grouped or stacked bar charts:
+
+    - Identify the primary categories on the X-axis.
+    - Identify individual series from the legend.
+    - Represent each primary category as one row.
+    - Represent each data series as a separate column.
+    - Preserve the relationship between categories and series.
+
+    Do not confuse the chart's visual arrangement with its logical data structure.
+
+    ### 3. Header Naming Rules
+
+    - Use `entity` as the first-column header when representing multiple data series as rows.
+    - Preserve the original category labels and time points.
+    - Use meaningful measurement headers when appropriate.
+    - Do not replace specific labels with unrelated generic terms.
+    - Do not invent headers that are unsupported by the chart.
+    - Preserve the original spelling and meaning of entity names.
+
+    ### 4. Units and Titles
+
+    - Extract units when they are explicitly provided.
+    - Do not append chart titles or descriptive sentences to column headers.
+    - Do not unnecessarily combine measurement units with header names.
+    - Keep chart titles, subtitles, and source information separate from the extracted data table.
+
+    ### 5. Numerical Data Extraction
+
+    - Extract all visible data points.
+    - Preserve the original chronological or categorical order.
+    - Do not omit rows, columns, or data series.
+    - Do not estimate values beyond what the chart supports.
+    - Preserve numerical precision as accurately as possible.
+    - Do not invent missing values.
+
+    ### 6. Final Output Requirements
+
+    - Output ONLY the extracted Markdown table.
+    - Do not include explanations, descriptions, or reasoning.
+    - Do not include the chart title or source information.
+    - Ensure the table has a consistent number of columns.
+    - Verify that the table orientation is consistent with the chart structure before producing the final output.
+
+    ### Header Normalization and Unit Handling
+
+    Column headers must represent the original data
+    dimensions or series names, not their measurement units.
+
+    Follow these rules:
+
+    1. Preserve the original category, entity, and series names.
+
+    2. Do NOT automatically append measurement units
+      to column headers.
+
+    3. Do NOT append percentage symbols such as (%)
+      to headers like:
+      - Dissatisfied
+      - Satisfied
+      - Employed
+      - Unemployed
+
+    4. Do NOT combine chart titles, subtitles, or
+      descriptive information with column headers.
+
+    5. If measurement units are displayed in the chart,
+      understand and preserve their meaning during
+      numerical extraction, but do not unnecessarily
+      include them in column names.
+
+    6. Use concise and consistent headers.
+
+    7. When a chart provides explicit series names,
+      use those names directly without adding
+      explanatory descriptions.
+
+    Examples:
+
+    Incorrect:
+    | Year | Dissatisfied (%) | Satisfied (%) |
+
+    Correct:
+    | Year | Dissatisfied | Satisfied |
+
+    Incorrect:
+    | Country | Population (Million) |
+
+    Correct:
+    | Country | Population |
+
+    Incorrect:
+    | Year | Revenue (USD) |
+
+    Correct:
+    | Year | Revenue |
 
 # Module B2 & B6: Metrics & Evaluation
 evaluation:
