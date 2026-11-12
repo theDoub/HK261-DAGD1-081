@@ -23,11 +23,14 @@ from src.metrics.table_metrics import (
     compute_value_recall_at_5,
 )
 from src.models.harness import (
+    ClaudeVLMBackend,
     DePlotBackend,
+    GeminiVLMBackend,
     MockBackend,
     OpenVLMBackend,
     VLMTableHarness,
 )
+import yaml
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
@@ -54,11 +57,19 @@ def build_harness(
         )
         return VLMTableHarness(backend=backend, target_format="markdown")
 
+    elif backend_lower == "gemini":
+        return VLMTableHarness(backend=GeminiVLMBackend(), target_format="markdown")
+
+    elif backend_lower == "claude":
+        return VLMTableHarness(backend=ClaudeVLMBackend(), target_format="markdown")
+
     elif backend_lower == "mock":
         return VLMTableHarness(backend=MockBackend(), target_format="markdown")
 
     else:
-        raise ValueError(f"Unsupported backend '{backend_name}'. Choose from: 'deplot', 'qwen', 'mock'.")
+        raise ValueError(
+            f"Unsupported backend '{backend_name}'. Choose from: 'deplot', 'qwen', 'gemini', 'claude', 'mock'."
+        )
 
 
 def evaluate_gate2(
@@ -87,6 +98,17 @@ def evaluate_gate2(
 
     harness = build_harness(backend_name, device=device, quantization=quantization)
 
+    active_prompt: Optional[str] = None
+    config_file = Path("configs/config.yaml")
+    backend_lower = backend_name.lower()
+    if config_file.exists() and backend_lower in {"qwen", "gemini", "claude"}:
+        try:
+            with open(config_file, "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+                active_prompt = cfg.get("qwen", {}).get("prompt")
+        except Exception:
+            pass
+
     records: List[Dict[str, Any]] = []
     t_start = time.perf_counter()
 
@@ -97,7 +119,7 @@ def evaluate_gate2(
         logger.info("[%d/%d] Extracting sample '%s' (%s)...", idx, total_eval, sample_id, item.image_path.name)
         sample_t0 = time.perf_counter()
 
-        extract_res = harness.extract_table(item.image_path)
+        extract_res = harness.extract_table(item.image_path, prompt=active_prompt)
         pred_table = extract_res.table
         elapsed = time.perf_counter() - sample_t0
 
@@ -199,7 +221,12 @@ def print_kpi_summary(summary: Dict[str, Any]) -> None:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description="Evaluate Chart-to-Table on ChartQA for Gate 2.")
-    parser.add_argument("--backend", default="deplot", choices=["deplot", "qwen", "mock"], help="Model backend")
+    parser.add_argument(
+        "--backend",
+        default="deplot",
+        choices=["deplot", "qwen", "gemini", "claude", "mock"],
+        help="Model backend",
+    )
     parser.add_argument("--data-dir", default="data/chartqa_test", type=Path, help="Path to ChartQA test data")
     parser.add_argument("--num-samples", type=int, default=None, help="Number of samples to evaluate (default: all)")
     parser.add_argument("--device", default="auto", help="Execution device (auto/cuda/cpu)")
