@@ -58,10 +58,28 @@ def build_harness(
         return VLMTableHarness(backend=backend, target_format="markdown")
 
     elif backend_lower == "gemini":
-        return VLMTableHarness(backend=GeminiVLMBackend(), target_format="markdown")
+        model_name = None
+        cfg_file = Path("configs/config.yaml")
+        if cfg_file.exists():
+            try:
+                with open(cfg_file, "r", encoding="utf-8") as f:
+                    cfg = yaml.safe_load(f)
+                    model_name = cfg.get("api_vlm", {}).get("gemini", {}).get("model_name")
+            except Exception:
+                pass
+        return VLMTableHarness(backend=GeminiVLMBackend(model_name=model_name), target_format="markdown")
 
     elif backend_lower == "claude":
-        return VLMTableHarness(backend=ClaudeVLMBackend(), target_format="markdown")
+        model_name = None
+        cfg_file = Path("configs/config.yaml")
+        if cfg_file.exists():
+            try:
+                with open(cfg_file, "r", encoding="utf-8") as f:
+                    cfg = yaml.safe_load(f)
+                    model_name = cfg.get("api_vlm", {}).get("claude", {}).get("model_name")
+            except Exception:
+                pass
+        return VLMTableHarness(backend=ClaudeVLMBackend(model_name=model_name), target_format="markdown")
 
     elif backend_lower == "mock":
         return VLMTableHarness(backend=MockBackend(), target_format="markdown")
