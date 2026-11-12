@@ -263,10 +263,10 @@ def parse_deplot_linearized(text: str) -> TableSchema:
         raw_values = parts
 
         if len(raw_values) != len(columns):
-            raise ValueError(
-                f"Expected {len(columns)} columns, "
-                f"received {len(raw_values)} in row: {line}"
-            )
+            if len(raw_values) < len(columns):
+                raw_values = raw_values + [""] * (len(columns) - len(raw_values))
+            else:
+                raw_values = raw_values[:len(columns)]
 
         row_idx = len(rows)
 

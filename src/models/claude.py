@@ -16,7 +16,7 @@ from src.models.api_cache import APIResponseCache
 class ClaudeHarness:
     """Runs Claude vision requests and caches successful responses."""
 
-    DEFAULT_MODEL = "claude-sonnet-4-6"
+    DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
     MEDIA_TYPES = {
         "JPEG": "image/jpeg",
         "PNG": "image/png",

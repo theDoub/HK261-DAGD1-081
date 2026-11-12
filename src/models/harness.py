@@ -270,7 +270,7 @@ class DePlotBackend(BaseExtractionBackend):
 class ClaudeVLMBackend(BaseExtractionBackend):
     """Lazy adapter that delegates extraction to the Claude-specific harness."""
 
-    DEFAULT_MODEL = "claude-sonnet-4-6"
+    DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
 
     def __init__(
         self,
@@ -327,7 +327,7 @@ class ClaudeVLMBackend(BaseExtractionBackend):
 class GeminiVLMBackend(BaseExtractionBackend):
     """Lazy adapter that delegates extraction to the Gemini-specific harness."""
 
-    DEFAULT_MODEL = "gemini-2.5-flash"
+    DEFAULT_MODEL = "gemini-1.5-flash"
 
     def __init__(
         self,

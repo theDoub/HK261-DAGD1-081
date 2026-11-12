@@ -14,9 +14,19 @@ from src.models.harness import OpenVLMBackend, VLMTableHarness
 class FakeTensor:
     def __init__(self, values, shape=None):
         self.values = values
-        self.shape = shape
+        self.shape = shape or (1, len(values[0]) if values and isinstance(values[0], list) else len(values))
 
     def __getitem__(self, item):
+        if isinstance(item, tuple):
+            row_idx, col_idx = item
+            rows = self.values[row_idx]
+            if isinstance(rows, list) and len(rows) > 0 and isinstance(rows[0], list):
+                selected = [r[col_idx] for r in rows]
+            elif isinstance(rows, list):
+                selected = rows[col_idx]
+            else:
+                selected = rows
+            return FakeTensor(selected)
         value = self.values[item]
         return FakeTensor(value) if isinstance(value, list) else value
 
@@ -42,11 +52,15 @@ class FakeProcessor:
 
     def __call__(self, **kwargs):
         self.processor_args = kwargs
-        return FakeBatch({"input_ids": FakeTensor([10, 11], shape=(1, 2))})
+        return FakeBatch({"input_ids": FakeTensor([[10, 11]], shape=(1, 2))})
 
     def decode(self, token_ids, **kwargs):
         self.decode_args = (token_ids.values, kwargs)
         return "```markdown\n| label | value |\n|---|---|\n| A | 9 |\n```"
+
+    def batch_decode(self, token_ids, **kwargs):
+        self.decode_args = (token_ids.values, kwargs)
+        return ["```markdown\n| label | value |\n|---|---|\n| A | 9 |\n```"]
 
 
 class FakeModel:
@@ -72,24 +86,33 @@ def install_fake_transformers(monkeypatch, processor, model):
 
     class FakeAutoProcessor:
         @staticmethod
-        def from_pretrained(model_name):
+        def from_pretrained(model_name, **kwargs):
             assert model_name == "test/qwen"
             return processor
 
     class FakeQwenModel:
         @staticmethod
-        def from_pretrained(model_name):
+        def from_pretrained(model_name, **kwargs):
             assert model_name == "test/qwen"
+            if "device_map" in kwargs:
+                model.device = "cuda"
             return model
+
+    class FakeBitsAndBytesConfig:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
 
     transformers.AutoProcessor = FakeAutoProcessor
     transformers.Qwen2_5_VLForConditionalGeneration = FakeQwenModel
+    transformers.BitsAndBytesConfig = FakeBitsAndBytesConfig
     monkeypatch.setitem(sys.modules, "transformers", transformers)
 
-    torch = ModuleType("torch")
-    torch.cuda = type("Cuda", (), {"is_available": staticmethod(lambda: True)})()
-    torch.inference_mode = nullcontext
-    monkeypatch.setitem(sys.modules, "torch", torch)
+    import torch as real_torch
+    monkeypatch.setattr(real_torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(real_torch.cuda, "synchronize", lambda: None)
+    monkeypatch.setattr(real_torch.cuda, "memory_allocated", lambda: 0)
+    if not hasattr(real_torch, "float16"):
+        monkeypatch.setattr(real_torch, "float16", "float16")
 
 
 def test_open_vlm_runs_qwen_and_returns_only_generated_text(tmp_path, monkeypatch):
@@ -121,8 +144,8 @@ def test_open_vlm_runs_qwen_and_returns_only_generated_text(tmp_path, monkeypatc
     assert processor.processor_args["padding"] is True
     assert processor.messages[0]["content"][1]["text"] == "extract the plotted values"
     assert processor.decode_args == (
-        [20, 21],
-        {"skip_special_tokens": True},
+        [[20, 21]],
+        {"skip_special_tokens": True, "clean_up_tokenization_spaces": False},
     )
 
 
@@ -148,10 +171,10 @@ def test_open_vlm_auto_uses_cpu_when_cuda_is_unavailable(tmp_path, monkeypatch):
     processor = FakeProcessor()
     model = FakeModel()
     install_fake_transformers(monkeypatch, processor, model)
-    torch = sys.modules["torch"]
-    torch.cuda = type("Cuda", (), {"is_available": staticmethod(lambda: False)})()
+    import torch as real_torch
+    monkeypatch.setattr(real_torch.cuda, "is_available", lambda: False)
 
-    backend = OpenVLMBackend(model_name="test/qwen", device="auto")
+    backend = OpenVLMBackend(model_name="test/qwen", device="auto", quantization="none")
     backend.generate("chart prompt", image_path)
 
     assert model.device == "cpu"
@@ -186,10 +209,8 @@ def test_open_vlm_cuda_unavailable_is_reported_by_harness(tmp_path, monkeypatch)
     image_path = tmp_path / "chart.png"
     Image.new("RGB", (4, 4), color="white").save(image_path)
 
-    torch = ModuleType("torch")
-    torch.cuda = type("Cuda", (), {"is_available": staticmethod(lambda: False)})()
-    torch.inference_mode = nullcontext
-    monkeypatch.setitem(sys.modules, "torch", torch)
+    import torch as real_torch
+    monkeypatch.setattr(real_torch.cuda, "is_available", lambda: False)
 
     harness = VLMTableHarness(
         backend=OpenVLMBackend(model_name="test/qwen", device="cuda")
@@ -198,5 +219,5 @@ def test_open_vlm_cuda_unavailable_is_reported_by_harness(tmp_path, monkeypatch)
 
     assert result.parse_ok is False
     assert result.error_message == (
-        "Backend failure: CUDA device 'cuda' requested, but CUDA is not available"
+        "Backend failure: CUDA device 'cuda' requested, but CUDA is unavailable"
     )
