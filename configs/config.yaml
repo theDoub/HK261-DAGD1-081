@@ -25,8 +25,28 @@ api_vlm:
   cache_dir: ".cache/chart_to_table/api_responses"
   gemini:
     model_name: "gemini-2.5-flash"
+    prompt: >
+      Extract all numerical values and categories from this chart into a clean GitHub-Flavored Markdown table.
+      Output ONLY the markdown table without any explanation, markdown code fence tags, or conversational preamble.
+      Follow these chart-to-table rules:
+      1. For multi-series charts (e.g. line charts, grouped bars):
+         - Use one row for each data series.
+         - The series name must be the first-column label.
+         - The time points or x-axis categories must be column headers.
+      2. For single-series charts:
+         - Use one row for each category.
+         - The category names must be in the first column.
+      3. Match visual colors in the legend to identify series names accurately.
+      4. Preserve exact numbers and original metric headers.
   claude:
     model_name: "claude-sonnet-4-6"
+    prompt: >
+      Extract all numerical data from this chart into a GitHub-Flavored Markdown table.
+      Return ONLY the raw markdown table. Do not include markdown code block syntax (no ```), greetings, or notes.
+      Formatting guidelines:
+      1. Multi-series charts: Each row corresponds to a series (first column = series name); column headers correspond to x-axis time points/categories.
+      2. Single-series charts: First column contains category names; second column contains values.
+      3. Keep numbers accurate and preserve headers as depicted.
 
 # Local Qwen vision-language extraction backend
 qwen:

@@ -105,7 +105,12 @@ def evaluate_gate2(
         try:
             with open(config_file, "r", encoding="utf-8") as f:
                 cfg = yaml.safe_load(f)
-                active_prompt = cfg.get("qwen", {}).get("prompt")
+                if backend_lower == "qwen":
+                    active_prompt = cfg.get("qwen", {}).get("prompt")
+                elif backend_lower == "gemini":
+                    active_prompt = cfg.get("api_vlm", {}).get("gemini", {}).get("prompt") or cfg.get("gemini", {}).get("prompt")
+                elif backend_lower == "claude":
+                    active_prompt = cfg.get("api_vlm", {}).get("claude", {}).get("prompt") or cfg.get("claude", {}).get("prompt")
         except Exception:
             pass
 
@@ -122,6 +127,9 @@ def evaluate_gate2(
         extract_res = harness.extract_table(item.image_path, prompt=active_prompt)
         pred_table = extract_res.table
         elapsed = time.perf_counter() - sample_t0
+
+        if backend_lower == "gemini" and idx < total_eval:
+            time.sleep(4.0)
 
         if pred_table and extract_res.parse_ok:
             rms = compute_rms_f1(pred_table, gt_table)
