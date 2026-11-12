@@ -24,7 +24,7 @@ api_vlm:
   cache_enabled: true
   cache_dir: ".cache/chart_to_table/api_responses"
   gemini:
-    model_name: "gemini-2.5-flash"
+    model_name: "gemini-1.5-flash"
     prompt: >
       Extract all numerical values and categories from this chart into a clean GitHub-Flavored Markdown table.
       Output ONLY the markdown table without any explanation, markdown code fence tags, or conversational preamble.
@@ -39,7 +39,7 @@ api_vlm:
       3. Match visual colors in the legend to identify series names accurately.
       4. Preserve exact numbers and original metric headers.
   claude:
-    model_name: "claude-sonnet-4-6"
+    model_name: "claude-3-5-sonnet-20241022"
     prompt: >
       Extract all numerical data from this chart into a GitHub-Flavored Markdown table.
       Return ONLY the raw markdown table. Do not include markdown code block syntax (no ```), greetings, or notes.
