@@ -241,13 +241,11 @@ def main():
         by_cat.setdefault(c, []).append(item)
 
     samples_to_show: List[Dict[str, Any]] = []
-    if args.sample_size is None:
-        samples_to_show = analysis["results"]
-    else:
-        quota_per_cat = max(1, args.sample_size // max(1, len(by_cat)))
-        for items in by_cat.values():
-            samples_to_show.extend(items[:quota_per_cat])
-        samples_to_show = samples_to_show[:args.sample_size]
+    quota_per_cat = max(3, args.sample_size // 4)
+    for c, items in by_cat.items():
+        samples_to_show.extend(items[:quota_per_cat])
+
+    samples_to_show = samples_to_show[:args.sample_size]
 
     print("\n" + "=" * 78)
     print(f" REPRESENTATIVE SAMPLE OF {len(samples_to_show)} MISMATCH CASES (SIDE-BY-SIDE AUDIT)")
