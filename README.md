@@ -67,6 +67,19 @@ python main.py --chartqa --backend claude --no-sample-limit
 
 Gemini/Claude dataset runs are capped at 10 samples by default to limit API usage. `--max-samples N` selects a smaller or larger cap; `--no-sample-limit` explicitly evaluates all samples. DePlot and Qwen evaluate all samples unless capped with `--max-samples`. Dataset predictions are written as JSONL files under `outputs/predictions/`. Hosted API keys and cache options are the same as for single-image mode.
 
+### Run a paired Qwen prompt evaluation
+
+For a prompt-only comparison, freeze the pre-change Qwen prompt in a UTF-8 text file and put the same newline-delimited sample IDs in a second file. Run both evaluations with identical model, device, quantization, token limit, dataset, and sample-ID options. The baseline uses `--prompt-file`; the candidate uses the prompt in `configs/config.yaml`. Each report records its exact prompt and inference conditions. A report produced before this metadata was added cannot verify its original prompt or settings.
+
+```powershell
+python scripts/evaluate_gate2.py --backend qwen --data-dir data/chartqa_test --sample-ids-file outputs\chartqa_ab_ids.txt --prompt-file outputs\qwen_baseline.prompt --device cuda --quantization 4bit --max-new-tokens 256 --output outputs\qwen_baseline_report.json
+python scripts/evaluate_gate2.py --backend qwen --data-dir data/chartqa_test --sample-ids-file outputs\chartqa_ab_ids.txt --device cuda --quantization 4bit --max-new-tokens 256 --output outputs\qwen_candidate_report.json
+python scripts/compare_gate2_reports.py --baseline outputs\qwen_baseline_report.json --candidate outputs\qwen_candidate_report.json --output outputs\qwen_prompt_comparison.json
+python scripts/analyze_header_mismatches.py --report outputs\qwen_candidate_report.json --data-dir data/chartqa_test --output-json outputs\qwen_header_mismatch_analysis.json
+```
+
+The comparison rejects reports with different sample IDs or recorded inference conditions and reports aggregate and per-sample outcomes. The mismatch analyzer categorizes all report mismatches for which a matching gold CSV is available and lists any samples it could not analyze.
+
 ---
 
 ## Architecture & Module Boundaries (B1–B6)
