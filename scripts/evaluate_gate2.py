@@ -101,7 +101,7 @@ def evaluate_gate2(
     output_path: Optional[Path] = None,
     prompt_override: Optional[str] = None,
     sample_ids: Optional[Sequence[str]] = None,
-    max_new_tokens: int = 256,
+    max_new_tokens: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Runs Gate 2 evaluation across real ChartQA samples and computes RMS-F1."""
     loader = ChartDataLoader(data_dir=data_dir, split=".")
@@ -150,6 +150,16 @@ def evaluate_gate2(
     elif backend_lower == "claude":
         model_name = api_config.get("claude", {}).get("model_name")
         active_prompt = api_config.get("claude", {}).get("prompt") or cfg.get("claude", {}).get("prompt")
+
+    if max_new_tokens is None:
+        max_new_tokens = 256
+        if backend_lower in {"qwen", "open_vlm"}:
+            configured_max_new_tokens = qwen_config.get("max_new_tokens", 256)
+            if isinstance(configured_max_new_tokens, bool) or not isinstance(configured_max_new_tokens, int):
+                raise ValueError("qwen.max_new_tokens in configs/config.yaml must be a positive integer")
+            max_new_tokens = configured_max_new_tokens
+    if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or max_new_tokens <= 0:
+        raise ValueError("max_new_tokens must be greater than zero")
 
     if prompt_override is not None:
         if not prompt_override.strip():
@@ -305,7 +315,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--num-samples", type=int, default=None, help="Number of samples to evaluate (default: all)")
     parser.add_argument("--device", default="auto", help="Execution device (auto/cuda/cpu)")
     parser.add_argument("--quantization", default="none", choices=["none", "4bit"], help="Quantization mode")
-    parser.add_argument("--max-new-tokens", default=256, type=int, help="Maximum generated tokens")
+    parser.add_argument(
+        "--max-new-tokens",
+        default=None,
+        type=int,
+        help="Maximum generated tokens (defaults to qwen.max_new_tokens in configs/config.yaml)",
+    )
     parser.add_argument("--prompt-file", type=Path, help="UTF-8 file containing the exact prompt to use")
     parser.add_argument(
         "--sample-ids-file",

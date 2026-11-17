@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Optional
 
 import pytest
 
@@ -101,8 +102,51 @@ def test_gate2_prompt_override_and_sample_order_are_recorded(tmp_path: Path, mon
 
 def test_gate2_rejects_missing_requested_sample_ids(tmp_path: Path):
     data_dir = tmp_path / "chartqa"
-    (data_dir / "images").mkdir(parents=True)
-    (data_dir / "tables").mkdir()
+    images_dir = data_dir / "images"
+    tables_dir = data_dir / "tables"
+    images_dir.mkdir(parents=True)
+    tables_dir.mkdir()
+    (images_dir / "available.png").write_bytes(b"mock image")
+    (tables_dir / "available.csv").write_text("Entity,Value\nA,1\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="missing from the dataset"):
         evaluate_gate2(data_dir=data_dir, backend_name="mock", sample_ids=["missing"])
+
+
+@pytest.mark.parametrize(("override", "expected"), [(None, 512), (37, 37)])
+def test_qwen_token_limit_uses_config_and_allows_override(
+    tmp_path: Path,
+    monkeypatch,
+    override: Optional[int],
+    expected: int,
+):
+    data_dir = tmp_path / "chartqa"
+    images_dir = data_dir / "images"
+    tables_dir = data_dir / "tables"
+    images_dir.mkdir(parents=True)
+    tables_dir.mkdir()
+    (images_dir / "sample.png").write_bytes(b"mock image")
+    (tables_dir / "sample.csv").write_text("Entity,Value\nA,1\n", encoding="utf-8")
+
+    config_dir = tmp_path / "configs"
+    config_dir.mkdir()
+    (config_dir / "config.yaml").write_text(
+        'qwen:\n  model_name_or_path: "test-model"\n  max_new_tokens: 512\n  prompt: "test prompt"\n',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    harness_args = {}
+
+    def fake_build_harness(*args, **kwargs):
+        harness_args.update(kwargs)
+        return VLMTableHarness(backend=MockBackend(predefined_table_md="| Entity | Value |\n|---|---|\n| A | 1 |"))
+
+    monkeypatch.setattr("scripts.evaluate_gate2.build_harness", fake_build_harness)
+    summary = evaluate_gate2(
+        data_dir=data_dir,
+        backend_name="qwen",
+        max_new_tokens=override,
+    )
+
+    assert harness_args["max_new_tokens"] == expected
+    assert summary["conditions"]["max_new_tokens"] == expected

@@ -69,11 +69,11 @@ Gemini/Claude dataset runs are capped at 10 samples by default to limit API usag
 
 ### Run a paired Qwen prompt evaluation
 
-For a prompt-only comparison, freeze the pre-change Qwen prompt in a UTF-8 text file and put the same newline-delimited sample IDs in a second file. Run both evaluations with identical model, device, quantization, token limit, dataset, and sample-ID options. The baseline uses `--prompt-file`; the candidate uses the prompt in `configs/config.yaml`. Each report records its exact prompt and inference conditions. A report produced before this metadata was added cannot verify its original prompt or settings.
+For a prompt-only comparison, freeze the pre-change Qwen prompt in a UTF-8 text file and put the same newline-delimited sample IDs in a second file. Run both evaluations with identical model, device, quantization, token limit, dataset, and sample-ID options. By default, the evaluator reads `qwen.max_new_tokens` from `configs/config.yaml`; pass `--max-new-tokens` only to override it for both runs. The baseline uses `--prompt-file`; the candidate uses the prompt in the config. Each report records its exact prompt and inference conditions. A report produced before this metadata was added cannot verify its original prompt or settings.
 
 ```powershell
-python scripts/evaluate_gate2.py --backend qwen --data-dir data/chartqa_test --sample-ids-file outputs\chartqa_ab_ids.txt --prompt-file outputs\qwen_baseline.prompt --device cuda --quantization 4bit --max-new-tokens 256 --output outputs\qwen_baseline_report.json
-python scripts/evaluate_gate2.py --backend qwen --data-dir data/chartqa_test --sample-ids-file outputs\chartqa_ab_ids.txt --device cuda --quantization 4bit --max-new-tokens 256 --output outputs\qwen_candidate_report.json
+python scripts/evaluate_gate2.py --backend qwen --data-dir data/chartqa_test --sample-ids-file outputs\chartqa_ab_ids.txt --prompt-file outputs\qwen_baseline.prompt --device cuda --quantization 4bit --output outputs\qwen_baseline_report.json
+python scripts/evaluate_gate2.py --backend qwen --data-dir data/chartqa_test --sample-ids-file outputs\chartqa_ab_ids.txt --device cuda --quantization 4bit --output outputs\qwen_candidate_report.json
 python scripts/compare_gate2_reports.py --baseline outputs\qwen_baseline_report.json --candidate outputs\qwen_candidate_report.json --output outputs\qwen_prompt_comparison.json
 python scripts/analyze_header_mismatches.py --report outputs\qwen_candidate_report.json --data-dir data/chartqa_test --output-json outputs\qwen_header_mismatch_analysis.json
 ```
