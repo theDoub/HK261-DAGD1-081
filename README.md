@@ -71,14 +71,77 @@ Gemini/Claude dataset runs are capped at 10 samples by default to limit API usag
 
 For a prompt-only comparison, freeze the pre-change Qwen prompt in a UTF-8 text file and put the same newline-delimited sample IDs in a second file. Run both evaluations with identical model, device, quantization, token limit, dataset, and sample-ID options. By default, the evaluator reads `qwen.max_new_tokens` from `configs/config.yaml`; pass `--max-new-tokens` only to override it for both runs. The baseline uses `--prompt-file`; the candidate uses the prompt in the config. Each report records its exact prompt and inference conditions. A report produced before this metadata was added cannot verify its original prompt or settings.
 
+### 1. PowerShell
+
 ```powershell
-python scripts/evaluate_gate2.py --backend qwen --data-dir data/chartqa_test --sample-ids-file outputs\chartqa_ab_ids.txt --prompt-file outputs\qwen_baseline.prompt --device cuda --quantization 4bit --output outputs\qwen_baseline_report.json
-python scripts/evaluate_gate2.py --backend qwen --data-dir data/chartqa_test --sample-ids-file outputs\chartqa_ab_ids.txt --device cuda --quantization 4bit --output outputs\qwen_candidate_report.json
-python scripts/compare_gate2_reports.py --baseline outputs\qwen_baseline_report.json --candidate outputs\qwen_candidate_report.json --output outputs\qwen_prompt_comparison.json
-python scripts/analyze_header_mismatches.py --report outputs\qwen_candidate_report.json --data-dir data/chartqa_test --output-json outputs\qwen_header_mismatch_analysis.json
+$env:PYTHONPATH = (Get-Location).Path
+
+# CPU inference does not support 4-bit quantization in this backend.
+python scripts/evaluate_gate2.py `
+  --backend qwen `
+  --data-dir data/chartqa_test `
+  --sample-ids-file outputs/chartqa_ab_ids.txt `
+  --prompt-file outputs/qwen_baseline.prompt `
+  --device cpu `
+  --quantization none `
+  --output outputs/qwen_baseline_report.json
+
+python scripts/evaluate_gate2.py `
+  --backend qwen `
+  --data-dir data/chartqa_test `
+  --sample-ids-file outputs/chartqa_ab_ids.txt `
+  --device cpu `
+  --quantization none `
+  --output outputs/qwen_candidate_report.json
+
+python scripts/compare_gate2_reports.py `
+  --baseline outputs/qwen_baseline_report.json `
+  --candidate outputs/qwen_candidate_report.json `
+  --output outputs/qwen_prompt_comparison.json
+
+python scripts/analyze_header_mismatches.py `
+  --report outputs/qwen_candidate_report.json `
+  --data-dir data/chartqa_test `
+  --output-json outputs/qwen_header_mismatch_analysis.json
 ```
 
-The comparison rejects reports with different sample IDs or recorded inference conditions and reports aggregate and per-sample outcomes. The mismatch analyzer categorizes all report mismatches for which a matching gold CSV is available and lists any samples it could not analyze.
+### 2. Linux / WSL (Bash)
+
+```bash
+export PYTHONPATH=\$(pwd)
+
+# CPU inference does not support 4-bit quantization in this backend.
+python scripts/evaluate_gate2.py \
+  --backend qwen \
+  --data-dir data/chartqa_test \
+  --sample-ids-file outputs/chartqa_ab_ids.txt \
+  --prompt-file outputs/qwen_baseline.prompt \
+  --device cpu \
+  --quantization none \
+  --output outputs/qwen_baseline_report.json
+
+python scripts/evaluate_gate2.py \
+  --backend qwen \
+  --data-dir data/chartqa_test \
+  --sample-ids-file outputs/chartqa_ab_ids.txt \
+  --device cpu \
+  --quantization none \
+  --output outputs/qwen_candidate_report.json
+
+python scripts/compare_gate2_reports.py \
+  --baseline outputs/qwen_baseline_report.json \
+  --candidate outputs/qwen_candidate_report.json \
+  --output outputs/qwen_prompt_comparison.json
+
+python scripts/analyze_header_mismatches.py \
+  --report outputs/qwen_candidate_report.json \
+  --data-dir data/chartqa_test \
+  --output-json outputs/qwen_header_mismatch_analysis.json
+```
+
+CPU inference with the 7B model requires substantial RAM and may be very slow. If CUDA is available, use `--device cuda --quantization 4bit` for both evaluation commands instead. The comparison rejects reports with different sample IDs or recorded inference conditions, and reports aggregate and per-sample outcomes; both the comparison and mismatch analyzer reject reports where every sample failed at backend initialization.
+
+The Qwen chart-extraction prompt specifies separate row/column layouts for line charts, horizontal or vertical grouped/stacked bars, single-series bars, and pie charts. Re-run the paired evaluation after changing these rules; mismatch-category counts alone do not measure an RMS-F1 regression or improvement.
 
 ---
 

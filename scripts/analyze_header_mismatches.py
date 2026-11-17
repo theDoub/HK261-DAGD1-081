@@ -143,6 +143,14 @@ def analyze_mismatches(report_path: Path, data_dir: Path) -> Dict[str, Any]:
         report = json.load(f)
 
     records = report.get("records", [])
+    if records and all(
+        str(record.get("error_message", "")).startswith("Backend failure:")
+        for record in records
+    ):
+        raise ValueError(
+            f"Cannot analyze {report_path}: every sample failed before extraction "
+            "because of a backend failure. Fix the inference configuration and rerun evaluation."
+        )
     mismatches = [r for r in records if r.get("error_category") == "header_mismatch"]
 
     results: List[Dict[str, Any]] = []

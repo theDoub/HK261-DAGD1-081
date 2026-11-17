@@ -51,6 +51,20 @@ def build_harness(
         return VLMTableHarness(backend=backend, target_format="deplot")
 
     elif backend_lower in {"qwen", "open_vlm"}:
+        if quantization == "4bit":
+            if device == "auto":
+                import torch
+
+                if not torch.cuda.is_available():
+                    raise ValueError(
+                        "Qwen 4-bit quantization requires CUDA. "
+                        "Use --device cpu --quantization none for CPU inference."
+                    )
+            elif not device.startswith("cuda"):
+                raise ValueError(
+                    "Qwen 4-bit quantization requires CUDA. "
+                    "Use --device cpu --quantization none for CPU inference."
+                )
         backend = OpenVLMBackend(
             model_name=model_name or "Qwen/Qwen2.5-VL-7B-Instruct",
             device=device,

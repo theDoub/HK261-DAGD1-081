@@ -34,10 +34,24 @@ def _error_counts(report: Dict[str, Any]) -> Dict[str, int]:
     return counts
 
 
+def _reject_backend_failure_report(report: Dict[str, Any], path: Path) -> None:
+    records = report["records"]
+    if records and all(
+        str(record.get("error_message", "")).startswith("Backend failure:")
+        for record in records
+    ):
+        raise ValueError(
+            f"Cannot compare {path}: every sample failed before extraction "
+            "because of a backend failure. Fix the inference configuration and rerun evaluation."
+        )
+
+
 def compare_gate2_reports(baseline_path: Path, candidate_path: Path) -> Dict[str, Any]:
     """Compare metrics and per-sample outcomes for the same inference conditions."""
     baseline = _read_report(baseline_path)
     candidate = _read_report(candidate_path)
+    _reject_backend_failure_report(baseline, baseline_path)
+    _reject_backend_failure_report(candidate, candidate_path)
     baseline_records = {record["sample_id"]: record for record in baseline["records"]}
     candidate_records = {record["sample_id"]: record for record in candidate["records"]}
 
