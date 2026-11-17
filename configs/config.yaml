@@ -37,32 +37,31 @@ qwen:
   prompt: |
     Convert the chart into one complete GitHub-Flavored Markdown table. Output only the table.
 
-    Choose the table layout by chart type, not by whether bars are drawn horizontally or vertically:
+    First identify the chart type, category/time axis, and series from the image. Choose the table orientation from the chart type, not from bar direction:
 
-    - LINE CHART: Always use one row per plotted line, including a chart with only one line. Put the line's exact label in the first column and each x-axis tick (such as each year) in a separate column. Never make the x-axis ticks into data rows for a line chart.
+    - LINE CHART: One row per line/series, including a single-line chart. First column is "Entity" and contains the exact series label, even when it is a country or region. Each x-axis tick is a separate remaining column. Never put years in the data rows for a line chart.
       | Entity | 2005 | 2006 |
       |---|---:|---:|
-      | <line label> | <value> | <value> |
-    - GROUPED OR STACKED BAR CHART: Always use one row per category/bar label and one value column per legend series/segment, for both horizontal and vertical bars. Never make the legend series the rows and all category labels the column headers.
+      | <line or country series> | <value> | <value> |
+    - GROUPED OR STACKED BAR CHART: One row per category on the category axis; one value column per exact legend series/segment. This is true for horizontal and vertical bars. If time is the category axis, use one row per time point.
       | Entity | Disapprove | Approve |
       |---|---:|---:|
-      | <bar/category label> | <value> | <value> |
-    - SINGLE-SERIES BAR CHART: Use one row per category/bar label and two columns: category and measured value. Do not put all categories in the header.
-      | Country | <measured quantity> |
+      | <category> | <value> | <value> |
+    - SINGLE-SERIES BAR CHART: One row per category and two columns. Use "Country" only when the bars are country categories; otherwise use the visible category-axis label, or "Entity" if none is shown.
+      | Country | <full measure name> |
       |---|---:|
       | <country> | <value> |
-    - PIE CHART: Use one row per slice/category and two columns: category and value. Never put all slice labels across the header.
+    - PIE CHART: One row per slice and two columns: category and value. Never put all slice labels across the header.
       | Entity | Value |
       |---|---:|
-      | <slice label> | <value> |
+      | <slice> | <value> |
 
-    Header rules:
-    - For country names used as data rows, name the first column "Country". For other categories or line-series labels, use "Entity". Use "Year" as the first header only when each data row is a year (for example, a bar chart whose categories are years).
-    - For a single-measure chart, use the full displayed measure name as the value header. Prefer the chart's exact axis/measure label; if absent, use the title or subtitle phrase that names the quantity, including a displayed year when it distinguishes the measure. Do not shorten it to an acronym or replace it with "Value" when a specific name is visible.
-    - For multi-series charts, use the exact legend labels as series headers or row labels. Do not promote the title, a bar category, or an axis tick to a series label.
-    - Preserve category, time, and legend labels as shown; do not paraphrase or infer replacements. Keep units in the measure header when shown there, and keep table values numeric without repeating units in cells.
-
-    Extract every plotted category and value exactly once, in chart order. Do not omit, duplicate, combine, or invent values. Ensure every row has the same number of columns.
+    Headers and values:
+    - Copy category, time, and legend labels as displayed; do not paraphrase, abbreviate, or substitute a guessed label. In particular, do not replace a visible measure with "GPI", "Value", "Category", "Show", or "Activity".
+    - For a single-measure chart, use its full displayed measurement/axis label as the value header. If absent, use the title/subtitle phrase that names the quantity, including a year when shown. Keep units in this header when displayed.
+    - Use exact legend labels for multi-series headers/rows. Use "Year" as the first header only when each data row represents a year; use "Entity" for line-series rows, including country-named series.
+    - Keep values numeric; do not repeat units or percent signs in cells. Read printed data labels when present. For an unlabeled plotted point or bar, estimate its value from the axis ticks instead of leaving its cell blank. Do not invent values for categories or points that are not plotted.
+    - Extract each plotted category and value once, in chart order, and keep every row the same length. For line charts, verify that series labels are rows and x-axis ticks are columns before answering.
 
 # Module B2 & B6: Metrics & Evaluation
 evaluation:
