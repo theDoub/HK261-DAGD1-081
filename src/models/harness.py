@@ -327,7 +327,7 @@ class ClaudeVLMBackend(BaseExtractionBackend):
 class GeminiVLMBackend(BaseExtractionBackend):
     """Lazy adapter that delegates extraction to the Gemini-specific harness."""
 
-    DEFAULT_MODEL = "gemini-1.5-flash"
+    DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
     def __init__(
         self,
