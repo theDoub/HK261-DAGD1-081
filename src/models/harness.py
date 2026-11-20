@@ -416,7 +416,7 @@ class VLMTableHarness:
         """Constructs prompt instructing VLM to extract chart data into the target tabular format."""
         if self.prompt:
             return self.prompt
-        if self.target_format == "deplot":
+        if self.target_format in {"deplot", "linearized"}:
             return (
                 "Generate underlying data table of the figure below in linearized format:\n"
                 "TITLE | <title>\n<header_1> | <header_2> ...\n<val_1> | <val_2> ..."

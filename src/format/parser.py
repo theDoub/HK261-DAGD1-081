@@ -307,7 +307,9 @@ def parse_table_text(text: str, fmt: str = "auto") -> TableSchema:
     cleaned = strip_markdown_codeblocks(text)
     if fmt == "markdown" or (fmt == "auto" and "|" in cleaned and "-|-" in cleaned):
         return parse_markdown_table(cleaned)
-    elif fmt == "deplot" or (fmt == "auto" and ("<0x0A>" in cleaned or cleaned.startswith("TITLE |"))):
+    elif fmt in {"deplot", "linearized"} or (
+        fmt == "auto" and ("<0x0A>" in cleaned or cleaned.startswith("TITLE |"))
+    ):
         return parse_deplot_linearized(cleaned)
     elif fmt == "csv" or (fmt == "auto" and "," in cleaned and "\n" in cleaned and "|" not in cleaned):
         return parse_csv_table(cleaned)

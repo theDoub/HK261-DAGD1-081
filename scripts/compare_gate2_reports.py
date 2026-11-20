@@ -15,7 +15,11 @@ COMPARISON_CONDITION_KEYS = (
     "quantization",
     "max_new_tokens",
 )
-REQUIRED_CONDITION_KEYS = COMPARISON_CONDITION_KEYS + ("prompt", "sample_ids")
+REQUIRED_CONDITION_KEYS = COMPARISON_CONDITION_KEYS + (
+    "output_format",
+    "prompt",
+    "sample_ids",
+)
 
 
 def _read_report(path: Path) -> Dict[str, Any]:
@@ -148,6 +152,18 @@ def compare_gate2_reports(baseline_path: Path, candidate_path: Path) -> Dict[str
         "paired_samples": sample_count,
         "sample_ids": list(ordered_ids),
         "conditions_verified": conditions_verified,
+        "baseline_output_format": (
+            baseline["conditions"].get("output_format") if conditions_available else None
+        ),
+        "candidate_output_format": (
+            candidate["conditions"].get("output_format") if conditions_available else None
+        ),
+        "output_format_changed": (
+            baseline["conditions"].get("output_format")
+            != candidate["conditions"].get("output_format")
+            if conditions_available
+            else None
+        ),
         "prompt_changed": (
             baseline["conditions"].get("prompt") != candidate["conditions"].get("prompt")
             if conditions_available

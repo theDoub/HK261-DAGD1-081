@@ -71,6 +71,8 @@ Gemini/Claude dataset runs are capped at 10 samples by default to limit API usag
 
 For a prompt-only comparison, freeze the pre-change Qwen prompt in a UTF-8 text file and put the same newline-delimited sample IDs in a second file. Run both evaluations with identical model, device, quantization, token limit, dataset, and sample-ID options. By default, the evaluator reads `qwen.max_new_tokens` from `configs/config.yaml`; pass `--max-new-tokens` only to override it for both runs. The baseline uses `--prompt-file`; the candidate uses the prompt in the config. Each report records its exact prompt and inference conditions. A report produced before this metadata was added cannot verify its original prompt or settings.
 
+The Qwen evaluator supports `--output-format markdown` (default) and `--output-format linearized`. Markdown uses `qwen.prompt_markdown`, while linearized uses `qwen.prompt_linearized`; a `--prompt-file` always overrides the selected configured prompt. Linearized output is restricted to Qwen/OpenVLM and uses the existing DePlot linearized parser. Report comparisons allow an intentional Markdown-versus-linearized format ablation, while still rejecting changes to model, device, quantization, token limit, dataset, backend, or sample set.
+
 ### 1. PowerShell
 
 ```powershell
