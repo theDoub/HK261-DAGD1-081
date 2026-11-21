@@ -145,6 +145,8 @@ CPU inference with the 7B model requires substantial RAM and may be very slow. I
 
 The Qwen chart-extraction prompt specifies separate row/column layouts for line charts, horizontal or vertical grouped/stacked bars, single-series bars, and pie charts. Re-run the paired evaluation after changing these rules; mismatch-category counts alone do not measure an RMS-F1 regression or improvement.
 
+For linearized output, the parser distinguishes explicit `<START>`/`<NEW_ROW>`/`<END>` responses from legacy DePlot text. Explicit responses require a valid header and equal-width rows; malformed row tokens or mismatched widths return a parse error instead of silently padding or truncating fields. Legacy DePlot-style pipe text remains supported.
+
 ---
 
 ## Architecture & Module Boundaries (B1–B6)

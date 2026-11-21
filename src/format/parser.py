@@ -183,6 +183,103 @@ def parse_csv_table(text: str) -> TableSchema:
     return TableSchema(columns=columns, rows=rows, triplets=triplets)
 
 
+def _parse_explicit_linearized(lines: List[str]) -> TableSchema:
+    """Strictly parses the explicit Linearized DePlot token grammar."""
+    if not lines or lines[-1] != "<END>":
+        raise ValueError("Malformed linearized table: missing exactly closing <END>")
+
+    end_count = sum(line == "<END>" for line in lines)
+    if end_count != 1:
+        raise ValueError("Malformed linearized table: expected exactly one <END>")
+
+    title = ""
+    columns: List[str] = []
+    rows: List[List[Any]] = []
+    triplets: List[TableTriplet] = []
+    seen_start = False
+
+    for line in lines[:-1]:
+        if re.search(r"<SNEW_ROW>", line, re.IGNORECASE):
+            raise ValueError(
+                "Malformed linearized table: unknown row token <SNEW_ROW>"
+            )
+
+        if line.startswith("TITLE |"):
+            title = line.split("|", 1)[1].strip()
+            continue
+
+        if line.startswith("<START>"):
+            if seen_start:
+                raise ValueError("Malformed linearized table: duplicate <START>")
+            seen_start = True
+            payload = line[len("<START>"):].strip()
+            if payload.startswith("TITLE |"):
+                title = payload.split("|", 1)[1].strip()
+            elif payload:
+                if columns:
+                    raise ValueError("Malformed linearized table: duplicate header row")
+                header_parts = [part.strip() for part in payload.split("|")]
+                if any(not part for part in header_parts):
+                    raise ValueError(
+                        "Malformed linearized table: header contains an empty column"
+                    )
+                columns = [normalize_header(part) for part in header_parts]
+            continue
+
+        if line.startswith("<NEW_ROW>"):
+            payload = line[len("<NEW_ROW>"):].strip()
+            if not payload:
+                raise ValueError("Malformed linearized table: <NEW_ROW> has no values")
+            parts = [part.strip() for part in payload.split("|")]
+
+            if not columns:
+                if not seen_start:
+                    raise ValueError(
+                        "Malformed linearized table: header must follow <START>"
+                    )
+                if any(not part for part in parts):
+                    raise ValueError(
+                        "Malformed linearized table: header contains an empty column"
+                    )
+                columns = [normalize_header(part) for part in parts]
+                continue
+
+            if len(parts) != len(columns):
+                raise ValueError(
+                    "Malformed linearized table: row has "
+                    f"{len(parts)} values but header has {len(columns)} columns"
+                )
+
+            row_idx = len(rows)
+            values = [normalize_value(value) for value in parts]
+            rows.append(values)
+            for col_name, value in zip(columns, values):
+                triplets.append(
+                    TableTriplet(row=row_idx, col=col_name, value=value)
+                )
+            continue
+
+        if re.match(r"<[^>]+>", line):
+            raise ValueError(
+                f"Malformed linearized table: unknown token in line {line!r}"
+            )
+        raise ValueError(
+            f"Malformed linearized table: expected a tokenized line, got {line!r}"
+        )
+
+    if not seen_start:
+        raise ValueError("Malformed linearized table: missing <START>")
+    if not columns:
+        raise ValueError("Malformed linearized table: missing header row")
+
+    return TableSchema(
+        title=title,
+        columns=columns,
+        rows=rows,
+        triplets=triplets,
+    )
+
+
 def parse_deplot_linearized(text: str) -> TableSchema:
     """
     Parse raw DePlot output or custom Linearized DePlot text.
@@ -224,6 +321,9 @@ def parse_deplot_linearized(text: str) -> TableSchema:
         for line in normalized_text.splitlines()
         if line.strip()
     ]
+
+    if re.search(r"<(?:START|NEW_ROW|END|SNEW_ROW)>", normalized_text):
+        return _parse_explicit_linearized(lines)
 
     title = ""
     columns: List[str] = []
@@ -304,6 +404,23 @@ def parse_table_text(text: str, fmt: str = "auto") -> TableSchema:
     Returns:
         TableSchema: Extracted table schema.
     """
+    if fmt in {"deplot", "linearized"}:
+        return parse_deplot_linearized(text)
+
+    raw_text = text if isinstance(text, str) else str(text)
+    if fmt == "auto" and re.search(
+        r"<(?:START|NEW_ROW|END|SNEW_ROW)>|<0x0A>",
+        raw_text,
+    ):
+        return parse_deplot_linearized(raw_text)
+    if fmt == "auto":
+        first_nonempty = next(
+            (line.strip() for line in raw_text.splitlines() if line.strip()),
+            "",
+        )
+        if first_nonempty.startswith("TITLE |"):
+            return parse_deplot_linearized(raw_text)
+
     cleaned = strip_markdown_codeblocks(text)
     if fmt == "markdown" or (fmt == "auto" and "|" in cleaned and "-|-" in cleaned):
         return parse_markdown_table(cleaned)

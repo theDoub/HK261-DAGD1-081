@@ -66,14 +66,25 @@ qwen:
   prompt_linearized: |
     Convert the chart into one complete DePlot-style linearized table. Output only the linearized table.
 
-    Use exactly this token and row contract:
-    - Start with TITLE | <exact chart title>, or omit the title line if no title is visible.
-    - Put the header row first as a pipe-separated line beginning with <START>, for example: <START> Entity | 2005 | 2006
-    - Put one pipe-separated data row after every <NEW_ROW> token, for example: <NEW_ROW> <line label> | 12 | 15
-    - Finish with exactly <END>.
-    - Keep every row the same number of columns as the header.
-    - Copy exact category, time, legend, and measurement labels; keep numeric values only (no units or percent signs).
-    - Use line-series rows and time-axis columns for line charts. Use category rows and legend/segment columns for grouped or stacked bars. Use one category and one full-measurement value column for single-series bars and pie charts.
+    Identify the chart from its visual marks before choosing the table layout: connected points/curves are a line chart; rectangular marks are bars, whether horizontal or vertical. Then identify the category/time axis and legend series. Do not infer chart type from labels or from the fact that the axis shows years.
+
+    - LINE CHART: Always use one row per plotted line/series, even when there is only one line. The first column is "Entity" and contains the exact line label; each x-axis tick is a separate remaining column. Never put years in data rows for a line chart.
+    - GROUPED OR STACKED BAR CHART: One row per category on the bar/category axis; one value column per exact legend series/segment. For bars whose categories are years, use one row per year and one column per series.
+    - SINGLE-SERIES BAR CHART: One row per bar/category and two columns. Never put all categories in the header.
+    - PIE CHART: One row per slice and two columns: category and value. Never put all slice labels across the header.
+
+    Use exactly this canonical token and row contract:
+    - Begin with <START> TITLE | <exact chart title>; if no title is visible, use <START> TITLE | on the same line.
+    - Then put the header row as exactly one pipe-separated line beginning with <NEW_ROW>, for example: <NEW_ROW> Entity | 2005 | 2006
+    - Put one pipe-separated data row after every subsequent <NEW_ROW> token, for example: <NEW_ROW> <line label> | 12 | 15
+    - Finish with exactly <END>. The compatibility form <START> Entity | 2005 | 2006 followed by <NEW_ROW> data rows is also accepted.
+    - Every header and data row must have the same number of columns. Do not pad or omit cells.
+    - Copy exact category, time, legend, and measurement labels; do not paraphrase, abbreviate, or substitute guessed labels. In particular, do not replace a visible measure with "GPI", "Value", "Category", "Show", or "Activity".
+    - Use "Country" when each row is a country category. Use "Entity" for a plotted line/series or a non-country category without a more specific visible axis label. Use "Year" for time-category bars.
+    - For a single-measure chart, use its full displayed measurement/axis label as the value header. If absent, use the title/subtitle phrase that names the quantity, including a year when shown. Keep units in this header when displayed.
+    - Use exact legend labels for multi-series headers/rows. Country names used as line-series labels belong under "Entity"; country names used as individual categories belong under "Country".
+    - Keep values numeric and omit units and percent signs from cells. Read printed data labels when present. For an unlabeled plotted point or bar, estimate its value from the axis ticks instead of leaving the cell blank. Do not invent values for categories or points that are not plotted.
+    - Extract each plotted category and value once, in chart order. Before answering, verify that line charts have series as rows and time-category bars have years as rows.
     - Do not add Markdown separators, prose, code fences, or any text outside the linearized representation.
   prompt: |
     Convert the chart into one complete GitHub-Flavored Markdown table. Output only the table.

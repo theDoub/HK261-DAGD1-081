@@ -418,8 +418,12 @@ class VLMTableHarness:
             return self.prompt
         if self.target_format in {"deplot", "linearized"}:
             return (
-                "Generate underlying data table of the figure below in linearized format:\n"
-                "TITLE | <title>\n<header_1> | <header_2> ...\n<val_1> | <val_2> ..."
+                "Generate one complete DePlot-style linearized table for the chart:\n"
+                "<START> TITLE | <exact title>\n"
+                "<NEW_ROW> <header_1> | <header_2>\n"
+                "<NEW_ROW> <value_1> | <value_2>\n"
+                "<END>\n"
+                "Use numeric values only. Never add prose or Markdown separators."
             )
         return (
             "Extract all numerical values and categories from this chart into a clean GitHub-Flavored "
