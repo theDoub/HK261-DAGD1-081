@@ -143,9 +143,18 @@ def analyze_mismatches(report_path: Path, data_dir: Path) -> Dict[str, Any]:
         report = json.load(f)
 
     records = report.get("records", [])
+    if records and all(
+        str(record.get("error_message", "")).startswith("Backend failure:")
+        for record in records
+    ):
+        raise ValueError(
+            f"Cannot analyze {report_path}: every sample failed before extraction "
+            "because of a backend failure. Fix the inference configuration and rerun evaluation."
+        )
     mismatches = [r for r in records if r.get("error_category") == "header_mismatch"]
 
     results: List[Dict[str, Any]] = []
+    unavailable_sample_ids: List[str] = []
     category_counts = {
         "(a) Đồng nghĩa khác chữ": 0,
         "(b) Bảng bị xoay (transpose)": 0,
@@ -160,6 +169,7 @@ def analyze_mismatches(report_path: Path, data_dir: Path) -> Dict[str, Any]:
 
         gold_csv_path = data_dir / "tables" / f"{sample_id}.csv"
         if not gold_csv_path.exists():
+            unavailable_sample_ids.append(sample_id)
             continue
 
         with open(gold_csv_path, "r", encoding="utf-8") as gf:
@@ -173,12 +183,22 @@ def analyze_mismatches(report_path: Path, data_dir: Path) -> Dict[str, Any]:
         )
 
         category_counts[cat] += 1
+        gold_headers_normalized = {header.strip().casefold() for header in gold_table.columns}
+        header_label_differences = [
+            header
+            for header in pred_table.columns
+            if header.strip().casefold() not in gold_headers_normalized
+        ]
 
         results.append({
             "sample_id": sample_id,
             "category": cat,
             "qwen_headers": pred_table.columns,
             "gold_headers": gold_table.columns,
+            "header_label_differences": header_label_differences,
+            "transpose_case": cat == "(b) Bảng bị xoay (transpose)",
+            "header_label_case": is_synonym_or_paraphrase(pred_table.columns, gold_table.columns),
+            "unit_or_title_case": is_unit_or_title(pred_table.columns, gold_table.columns),
             "f1": record.get("rms_f1", 0.0),
             "rnss": record.get("rnss", 0.0),
             "value_recall_5": record.get("value_recall_at_5", 0.0),
@@ -186,7 +206,9 @@ def analyze_mismatches(report_path: Path, data_dir: Path) -> Dict[str, Any]:
         })
 
     return {
-        "total_mismatches": len(results),
+        "total_mismatches": len(mismatches),
+        "analyzed_mismatches": len(results),
+        "unavailable_sample_ids": unavailable_sample_ids,
         "category_counts": category_counts,
         "results": results
     }
@@ -197,7 +219,7 @@ def main():
     parser.add_argument("--report", default=Path("outputs/gate2_qwen_report.json"), type=Path)
     parser.add_argument("--data-dir", default=Path("data/chartqa_test"), type=Path)
     parser.add_argument("--output-json", default=Path("outputs/qwen_header_mismatch_analysis.json"), type=Path)
-    parser.add_argument("--sample-size", default=20, type=int)
+    parser.add_argument("--sample-size", default=None, type=int, help="Limit printed examples (default: all)")
 
     args = parser.parse_args()
 
@@ -207,7 +229,10 @@ def main():
     print("\n" + "=" * 78)
     print(" QWEN2.5-VL HEADER MISMATCH ERROR DIAGNOSIS & CATEGORIZATION REPORT")
     print("=" * 78)
-    print(f" Total Header Mismatch Cases Analyzed: {analysis['total_mismatches']}")
+    print(f" Reported Header Mismatch Cases: {analysis['total_mismatches']}")
+    print(f" Cases Analyzed with Gold CSV: {analysis['analyzed_mismatches']}")
+    if analysis["unavailable_sample_ids"]:
+        print(f" Cases Missing Gold CSV: {len(analysis['unavailable_sample_ids'])}")
     print("-" * 78)
     for cat, cnt in analysis["category_counts"].items():
         pct = (cnt / total) * 100

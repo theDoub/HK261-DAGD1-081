@@ -98,6 +98,8 @@ def build_harness(
     backend_name: str,
     device: str = "auto",
     quantization: str = "none",
+    model_name: Optional[str] = None,
+    max_new_tokens: int = 256,
 ) -> VLMTableHarness:
     """Builds VLMTableHarness configured for the specified backend."""
     backend_lower = backend_name.lower()
@@ -107,11 +109,25 @@ def build_harness(
         return VLMTableHarness(backend=backend, target_format="deplot")
 
     elif backend_lower in {"qwen", "open_vlm"}:
+        if quantization == "4bit":
+            if device == "auto":
+                import torch
+
+                if not torch.cuda.is_available():
+                    raise ValueError(
+                        "Qwen 4-bit quantization requires CUDA. "
+                        "Use --device cpu --quantization none for CPU inference."
+                    )
+            elif not device.startswith("cuda"):
+                raise ValueError(
+                    "Qwen 4-bit quantization requires CUDA. "
+                    "Use --device cpu --quantization none for CPU inference."
+                )
         backend = OpenVLMBackend(
-            model_name="Qwen/Qwen2.5-VL-7B-Instruct",
+            model_name=model_name or "Qwen/Qwen2.5-VL-7B-Instruct",
             device=device,
             quantization=quantization,
-            max_new_tokens=256,
+            max_new_tokens=max_new_tokens,
         )
         return VLMTableHarness(backend=backend, target_format="markdown")
 
@@ -155,6 +171,9 @@ def evaluate_gate2(
     device: str = "auto",
     quantization: str = "none",
     output_path: Optional[Path] = None,
+    prompt_override: Optional[str] = None,
+    sample_ids: Optional[Sequence[str]] = None,
+    max_new_tokens: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Runs Gate 2 evaluation across real ChartQA samples and computes RMS-F1."""
     loader = ChartDataLoader(data_dir=data_dir, split=".")
@@ -166,29 +185,66 @@ def evaluate_gate2(
 
     # Filter only items that have gold CSV tables
     eval_items = [it for it in items if it.table is not None and it.image_path is not None and it.image_path.exists()]
-    if num_samples is not None and num_samples > 0:
+    if sample_ids is not None:
+        requested_ids = list(sample_ids)
+        if not requested_ids:
+            raise ValueError("sample_ids must contain at least one sample ID")
+        if len(set(requested_ids)) != len(requested_ids):
+            raise ValueError("sample_ids must not contain duplicates")
+        items_by_id = {item.id: item for item in eval_items}
+        missing_ids = [sample_id for sample_id in requested_ids if sample_id not in items_by_id]
+        if missing_ids:
+            raise ValueError(f"Requested sample IDs are missing from the dataset: {missing_ids}")
+        eval_items = [items_by_id[sample_id] for sample_id in requested_ids]
+    elif num_samples is not None and num_samples > 0:
         eval_items = eval_items[:num_samples]
 
     total_eval = len(eval_items)
     logger.info("Initializing Gate 2 evaluation with backend '%s' on %d samples...", backend_name, total_eval)
 
-    harness = build_harness(backend_name, device=device, quantization=quantization)
-
     active_prompt: Optional[str] = None
     config_file = Path("configs/config.yaml")
     backend_lower = backend_name.lower()
-    if config_file.exists() and backend_lower in {"qwen", "gemini", "claude"}:
-        try:
-            with open(config_file, "r", encoding="utf-8") as f:
-                cfg = yaml.safe_load(f)
-                if backend_lower == "qwen":
-                    active_prompt = cfg.get("qwen", {}).get("prompt")
-                elif backend_lower == "gemini":
-                    active_prompt = cfg.get("api_vlm", {}).get("gemini", {}).get("prompt") or cfg.get("gemini", {}).get("prompt")
-                elif backend_lower == "claude":
-                    active_prompt = cfg.get("api_vlm", {}).get("claude", {}).get("prompt") or cfg.get("claude", {}).get("prompt")
-        except Exception:
-            pass
+    cfg: Dict[str, Any] = {}
+    if config_file.exists() and backend_lower in {"qwen", "open_vlm", "gemini", "claude"}:
+        with open(config_file, "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+
+    qwen_config = cfg.get("qwen", {})
+    api_config = cfg.get("api_vlm", {})
+    model_name: Optional[str] = None
+    if backend_lower in {"qwen", "open_vlm"}:
+        model_name = qwen_config.get("model_name_or_path")
+        active_prompt = qwen_config.get("prompt")
+    elif backend_lower == "gemini":
+        model_name = api_config.get("gemini", {}).get("model_name")
+        active_prompt = api_config.get("gemini", {}).get("prompt") or cfg.get("gemini", {}).get("prompt")
+    elif backend_lower == "claude":
+        model_name = api_config.get("claude", {}).get("model_name")
+        active_prompt = api_config.get("claude", {}).get("prompt") or cfg.get("claude", {}).get("prompt")
+
+    if max_new_tokens is None:
+        max_new_tokens = 256
+        if backend_lower in {"qwen", "open_vlm"}:
+            configured_max_new_tokens = qwen_config.get("max_new_tokens", 256)
+            if isinstance(configured_max_new_tokens, bool) or not isinstance(configured_max_new_tokens, int):
+                raise ValueError("qwen.max_new_tokens in configs/config.yaml must be a positive integer")
+            max_new_tokens = configured_max_new_tokens
+    if isinstance(max_new_tokens, bool) or not isinstance(max_new_tokens, int) or max_new_tokens <= 0:
+        raise ValueError("max_new_tokens must be greater than zero")
+
+    if prompt_override is not None:
+        if not prompt_override.strip():
+            raise ValueError("prompt_override must not be empty")
+        active_prompt = prompt_override
+
+    harness = build_harness(
+        backend_name,
+        device=device,
+        quantization=quantization,
+        model_name=model_name,
+        max_new_tokens=max_new_tokens,
+    )
 
     records: List[Dict[str, Any]] = []
     t_start = time.perf_counter()
@@ -267,6 +323,22 @@ def evaluate_gate2(
             else f"VLM Model Inference ({backend_name})"
         ),
         "backend": backend_name,
+        "conditions": {
+            "model_name_or_path": model_name,
+            "device_requested": device,
+            "device_used": getattr(harness.backend, "device", device),
+            "quantization": quantization if backend_lower in {"qwen", "open_vlm"} else None,
+            "max_new_tokens": max_new_tokens if backend_lower in {"qwen", "open_vlm"} else None,
+            "prompt": active_prompt,
+            "prompt_source": (
+                "override"
+                if prompt_override is not None
+                else "config"
+                if active_prompt is not None
+                else "backend_default"
+            ),
+            "sample_ids": [item.id for item in eval_items],
+        },
         "parse_success_count": parse_success_count,
         "parse_success_rate": round(parse_success_count / total_eval * 100, 2) if total_eval > 0 else 0.0,
         "mean_rms_f1": round(mean_f1, 4),
@@ -336,9 +408,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--num-samples", type=int, default=None, help="Number of samples to evaluate (default: all)")
     parser.add_argument("--device", default="auto", help="Execution device (auto/cuda/cpu)")
     parser.add_argument("--quantization", default="none", choices=["none", "4bit"], help="Quantization mode")
+    parser.add_argument(
+        "--max-new-tokens",
+        default=None,
+        type=int,
+        help="Maximum generated tokens (defaults to qwen.max_new_tokens in configs/config.yaml)",
+    )
+    parser.add_argument("--prompt-file", type=Path, help="UTF-8 file containing the exact prompt to use")
+    parser.add_argument(
+        "--sample-ids-file",
+        type=Path,
+        help="UTF-8 newline-delimited sample IDs; preserves the listed order for paired evaluations",
+    )
     parser.add_argument("--output", default=Path("outputs/gate2_evaluation_report.json"), type=Path, help="Output JSON")
 
     args = parser.parse_args(argv)
+    prompt_override = None
+    if args.prompt_file is not None:
+        prompt_override = args.prompt_file.read_text(encoding="utf-8")
+    sample_ids = None
+    if args.sample_ids_file is not None:
+        sample_ids = [
+            line.strip()
+            for line in args.sample_ids_file.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
 
     summary = evaluate_gate2(
         data_dir=args.data_dir,
@@ -347,6 +441,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         device=args.device,
         quantization=args.quantization,
         output_path=args.output,
+        prompt_override=prompt_override,
+        sample_ids=sample_ids,
+        max_new_tokens=args.max_new_tokens,
     )
 
     print_kpi_summary(summary)
