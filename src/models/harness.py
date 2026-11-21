@@ -270,7 +270,7 @@ class DePlotBackend(BaseExtractionBackend):
 class ClaudeVLMBackend(BaseExtractionBackend):
     """Lazy adapter that delegates extraction to the Claude-specific harness."""
 
-    DEFAULT_MODEL = "claude-sonnet-4-6"
+    DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
 
     def __init__(
         self,
@@ -327,7 +327,7 @@ class ClaudeVLMBackend(BaseExtractionBackend):
 class GeminiVLMBackend(BaseExtractionBackend):
     """Lazy adapter that delegates extraction to the Gemini-specific harness."""
 
-    DEFAULT_MODEL = "gemini-2.5-flash"
+    DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
     def __init__(
         self,
@@ -388,19 +388,22 @@ class VLMTableHarness:
         self,
         backend: Union[str, BaseExtractionBackend] = "mock",
         target_format: str = "markdown",
+        prompt: Optional[str] = None,
     ) -> None:
         """Initializes the harness.
 
         Args:
-            backend: Backend instance or name ('mock', 'open_vlm', 'gemini', 'claude', 'deplot').
+            backend: Backend instance or name ('mock', 'qwen', 'open_vlm', 'gemini', 'claude', 'deplot').
             target_format: Expected output format ('markdown' or 'deplot').
+            prompt: Optional prompt override used for all extractions.
         """
         self.target_format = target_format
+        self.prompt = prompt
         if isinstance(backend, BaseExtractionBackend):
             self.backend = backend
         elif backend == "deplot":
             self.backend = DePlotBackend()
-        elif backend == "open_vlm":
+        elif backend in ("qwen", "open_vlm"):
             self.backend = OpenVLMBackend()
         elif backend == "gemini":
             self.backend = GeminiVLMBackend()
@@ -411,6 +414,8 @@ class VLMTableHarness:
 
     def format_prompt(self) -> str:
         """Constructs prompt instructing VLM to extract chart data into the target tabular format."""
+        if self.prompt:
+            return self.prompt
         if self.target_format == "deplot":
             return (
                 "Generate underlying data table of the figure below in linearized format:\n"

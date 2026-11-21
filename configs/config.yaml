@@ -24,19 +24,58 @@ api_vlm:
   cache_enabled: true
   cache_dir: ".cache/chart_to_table/api_responses"
   gemini:
-    model_name: "gemini-2.5-flash"
+    model_name: "gemini-3.5-flash-lite"
+    prompt: >
+      Extract all numerical values and categories from this chart into a clean GitHub-Flavored Markdown table.
+      Output ONLY the markdown table without any explanation, markdown code fence tags, or conversational preamble.
+      Follow these chart-to-table rules:
+      1. For multi-series charts (e.g. line charts, grouped bars):
+         - Use one row for each data series.
+         - The series name must be the first-column label.
+         - The time points or x-axis categories must be column headers.
+      2. For single-series charts:
+         - Use one row for each category.
+         - The category names must be in the first column.
+      3. Match visual colors in the legend to identify series names accurately.
+      4. Preserve exact numbers and original metric headers.
   claude:
-    model_name: "claude-sonnet-4-6"
+    model_name: "claude-3-5-sonnet-20241022"
+
 # Local Qwen vision-language extraction backend
 qwen:
   model_name_or_path: "Qwen/Qwen2.5-VL-7B-Instruct"
   device: "auto"  # "auto", "cuda", or "cpu"
-  max_new_tokens: 256
+  max_new_tokens: 512
   quantization: "4bit"
-  prompt: >
-    Extract all numerical values and categories from this chart into a clean
-    GitHub-Flavored Markdown table.
-    Output only the markdown table without conversational explanation.
+  prompt: |
+    Convert the chart into one complete GitHub-Flavored Markdown table. Output only the table.
+
+    Identify the chart from its visual marks before choosing the table layout: connected points/curves are a line chart; rectangular marks are bars, whether horizontal or vertical. Then identify the category/time axis and legend series. Do not infer chart type from labels or from the fact that the axis shows years.
+
+    - LINE CHART: Always use one row per plotted line/series, even when there is only one line. The first column is "Entity" and contains the exact line label; each x-axis tick is a separate remaining column. Never put years in data rows for a line chart.
+      | Entity | 2005 | 2006 |
+      |---|---:|---:|
+      | <line label> | <value> | <value> |
+    - GROUPED OR STACKED BAR CHART: One row per category on the bar/category axis; one value column per exact legend series/segment. For bars whose categories are years, use one row per year and one column per series.
+      | Entity | Disapprove | Approve |
+      |---|---:|---:|
+      | <category> | <value> | <value> |
+    - SINGLE-SERIES BAR CHART: One row per bar/category and two columns. Never put all categories in the header.
+      | Country | <full measure name> |
+      |---|---:|
+      | <country> | <value> |
+    - PIE CHART: One row per slice and two columns: category and value. Never put all slice labels across the header.
+      | Entity | Value |
+      |---|---:|
+      | <slice> | <value> |
+
+    Headers and values:
+    - Copy category, time, and legend labels as displayed; do not paraphrase, abbreviate, or substitute a guessed label. In particular, do not replace a visible measure with "GPI", "Value", "Category", "Show", or "Activity".
+    - Use "Country" when each row is a country category (for example, one bar/value per country), regardless of whether the chart is horizontal or vertical. Use "Entity" when each row is a plotted line/series or a non-country category without a more specific visible axis label. For time-category bars, use "Year".
+    - For a single-measure chart, use its full displayed measurement/axis label as the value header. If absent, use the title/subtitle phrase that names the quantity, including a year when shown. Keep units in this header when displayed.
+    - Use exact legend labels for multi-series headers/rows. Country names used as line-series labels belong under "Entity"; country names used as individual categories belong under "Country".
+    - Keep values numeric; do not repeat units or percent signs in cells. Read printed data labels when present. For an unlabeled plotted point or bar, estimate its value from the axis ticks instead of leaving its cell blank. Do not invent values for categories or points that are not plotted.
+    - Extract each plotted category and value once, in chart order, and keep every row the same length. Before answering, verify that line charts have series as rows, while time-category bar charts have years as rows.
 
 # Module B2 & B6: Metrics & Evaluation
 evaluation:
