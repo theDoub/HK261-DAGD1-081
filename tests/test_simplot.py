@@ -217,3 +217,24 @@ class TestTask71ChartQALoader:
         assert items[0].table is not None
         assert items[0].table.columns == ["col1", "col2"]
 
+
+    def test_chartqa_dataset_size_at_least_300(self):
+        """Verifies that data/chartqa_test contains >= 300 real ChartQA multimodal samples."""
+        project_root = Path(__file__).resolve().parent.parent
+        chartqa_dir = project_root / "data" / "chartqa_test"
+        if not chartqa_dir.exists():
+            pytest.skip(f"ChartQA test directory not found at: {chartqa_dir}")
+
+        loader = ChartDataLoader(data_dir=chartqa_dir, split=".")
+        items = loader.scan_dataset()
+
+        assert len(items) >= 300, f"Expected >= 300 items, found {len(items)}"
+
+        # Validate that all 300 samples have valid images and tables
+        valid_tables = [item for item in items if item.table is not None]
+        assert len(valid_tables) >= 300, f"Expected >= 300 valid tables, found {len(valid_tables)}"
+
+        # Verify self-consistency of all 300 gold tables
+        report = loader.verify_gold_tables()
+        assert report["all_valid"] is True
+        assert report["valid_count"] >= 300

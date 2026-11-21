@@ -6,8 +6,10 @@ pyyaml
 pytest
 scipy
 torch
+torchvision
 transformers>=4.49.0
 pillow
 matplotlib
 anthropic>=0.40.0
 google-genai>=1.0.0
+bitsandbytes>=0.46.1

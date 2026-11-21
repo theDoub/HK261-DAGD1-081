@@ -40,11 +40,19 @@ $env:ANTHROPIC_API_KEY = "YOUR_ANTHROPIC_API_KEY"
 python main.py --image "C:\charts\chart.png" --backend claude --output "outputs\single\chart-claude.json"
 ```
 
+For local Qwen2.5-VL inference, use the same command with `--backend qwen`:
+
+```powershell
+python main.py --image "C:\charts\chart.png" --backend qwen --output "outputs\single\chart-qwen.json"
+```
+
+Qwen model settings (model ID, device, quantization, generation limit, and prompt) come from the `qwen` section of `configs/config.yaml`. The default 4-bit quantization requires a supported CUDA setup and BitsAndBytes (`python -m pip install bitsandbytes`); on CPU, change `quantization` to `none` in that config. The model weights are downloaded from Hugging Face the first time; the 7B model needs substantial system/GPU memory. To use a smaller compatible checkpoint or change the device, update the config.
+
 For macOS/Linux shells, set the API key with `export GEMINI_API_KEY="YOUR_GEMINI_API_KEY"` or `export ANTHROPIC_API_KEY="YOUR_ANTHROPIC_API_KEY"` and pass an image path such as `./charts/chart.png`.
 
 The API keys are not stored in the repository or response cache. Hosted API requests may incur charges; a Claude chat subscription does not include Claude API usage. Gemini quotas and free-tier eligibility vary. Check the official [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) and [Anthropic API pricing](https://platform.claude.com/docs/en/about-claude/pricing) before making requests. Repeated requests use the local response cache by default; pass `--no-api-cache` to bypass cache reads and writes. The default cache directory is `.cache/chart_to_table/api_responses`.
 
-The configured models default to `google/deplot`, `gemini-2.5-flash`, and `claude-sonnet-4-6`; edit the relevant sections in `configs/config.yaml` to change them. Invalid images or unsuccessful extraction/parsing return a non-zero process exit code. For a hosted API call, the selected API key must be set; installing the SDK alone does not provide API access.
+The configured models default to `google/deplot`, `Qwen/Qwen2.5-VL-7B-Instruct`, `gemini-2.5-flash`, and `claude-sonnet-4-6`; edit the relevant sections in `configs/config.yaml` to change them. Invalid images or unsuccessful extraction/parsing return a non-zero process exit code. For a hosted API call, the selected API key must be set; installing the SDK alone does not provide API access.
 
 ### Evaluate the ChartQA dataset
 
@@ -52,11 +60,88 @@ Dataset mode requires ChartQA files locally under `data/raw/ChartQA_Dataset/test
 
 ```powershell
 python main.py --chartqa --backend deplot
+python main.py --chartqa --backend qwen --max-samples 10
 python main.py --chartqa --backend gemini --max-samples 10
 python main.py --chartqa --backend claude --no-sample-limit
 ```
 
-Gemini/Claude dataset runs are capped at 10 samples by default to limit API usage. `--max-samples N` selects a smaller or larger cap; `--no-sample-limit` explicitly evaluates all samples. DePlot evaluates all samples unless capped with `--max-samples`. Dataset predictions are written as JSONL files under `outputs/predictions/`. Hosted API keys and cache options are the same as for single-image mode.
+Gemini/Claude dataset runs are capped at 10 samples by default to limit API usage. `--max-samples N` selects a smaller or larger cap; `--no-sample-limit` explicitly evaluates all samples. DePlot and Qwen evaluate all samples unless capped with `--max-samples`. Dataset predictions are written as JSONL files under `outputs/predictions/`. Hosted API keys and cache options are the same as for single-image mode.
+
+### Run a paired Qwen prompt evaluation
+
+For a prompt-only comparison, freeze the pre-change Qwen prompt in a UTF-8 text file and put the same newline-delimited sample IDs in a second file. Run both evaluations with identical model, device, quantization, token limit, dataset, and sample-ID options. By default, the evaluator reads `qwen.max_new_tokens` from `configs/config.yaml`; pass `--max-new-tokens` only to override it for both runs. The baseline uses `--prompt-file`; the candidate uses the prompt in the config. Each report records its exact prompt and inference conditions. A report produced before this metadata was added cannot verify its original prompt or settings.
+
+### 1. PowerShell
+
+```powershell
+$env:PYTHONPATH = (Get-Location).Path
+
+# CPU inference does not support 4-bit quantization in this backend.
+python scripts/evaluate_gate2.py `
+  --backend qwen `
+  --data-dir data/chartqa_test `
+  --sample-ids-file outputs/chartqa_ab_ids.txt `
+  --prompt-file outputs/qwen_baseline.prompt `
+  --device cpu `
+  --quantization none `
+  --output outputs/qwen_baseline_report.json
+
+python scripts/evaluate_gate2.py `
+  --backend qwen `
+  --data-dir data/chartqa_test `
+  --sample-ids-file outputs/chartqa_ab_ids.txt `
+  --device cpu `
+  --quantization none `
+  --output outputs/qwen_candidate_report.json
+
+python scripts/compare_gate2_reports.py `
+  --baseline outputs/qwen_baseline_report.json `
+  --candidate outputs/qwen_candidate_report.json `
+  --output outputs/qwen_prompt_comparison.json
+
+python scripts/analyze_header_mismatches.py `
+  --report outputs/qwen_candidate_report.json `
+  --data-dir data/chartqa_test `
+  --output-json outputs/qwen_header_mismatch_analysis.json
+```
+
+### 2. Linux / WSL (Bash)
+
+```bash
+export PYTHONPATH=\$(pwd)
+
+# CPU inference does not support 4-bit quantization in this backend.
+python scripts/evaluate_gate2.py \
+  --backend qwen \
+  --data-dir data/chartqa_test \
+  --sample-ids-file outputs/chartqa_ab_ids.txt \
+  --prompt-file outputs/qwen_baseline.prompt \
+  --device cpu \
+  --quantization none \
+  --output outputs/qwen_baseline_report.json
+
+python scripts/evaluate_gate2.py \
+  --backend qwen \
+  --data-dir data/chartqa_test \
+  --sample-ids-file outputs/chartqa_ab_ids.txt \
+  --device cpu \
+  --quantization none \
+  --output outputs/qwen_candidate_report.json
+
+python scripts/compare_gate2_reports.py \
+  --baseline outputs/qwen_baseline_report.json \
+  --candidate outputs/qwen_candidate_report.json \
+  --output outputs/qwen_prompt_comparison.json
+
+python scripts/analyze_header_mismatches.py \
+  --report outputs/qwen_candidate_report.json \
+  --data-dir data/chartqa_test \
+  --output-json outputs/qwen_header_mismatch_analysis.json
+```
+
+CPU inference with the 7B model requires substantial RAM and may be very slow. If CUDA is available, use `--device cuda --quantization 4bit` for both evaluation commands instead. The comparison rejects reports with different sample IDs or recorded inference conditions, and reports aggregate and per-sample outcomes; both the comparison and mismatch analyzer reject reports where every sample failed at backend initialization.
+
+The Qwen chart-extraction prompt specifies separate row/column layouts for line charts, horizontal or vertical grouped/stacked bars, single-series bars, and pie charts. Re-run the paired evaluation after changing these rules; mismatch-category counts alone do not measure an RMS-F1 regression or improvement.
 
 ---
 
@@ -130,25 +215,13 @@ python main.py
 ```
 Runs a complete mock run: loads synthetic charts, simulates extraction, parses tables, and computes metric breakdowns.
 
-### 5. Run Real Qwen Inference on One Chart
-
-The `open_vlm` backend runs Qwen locally through Transformers. Install the project dependencies and a PyTorch build suitable for your hardware, then run:
-
-```bash
-python -m scripts.run_qwen --image data/raw/chart-for-test.jpg
-```
-
-The first run downloads the configured model (`Qwen/Qwen2.5-VL-7B-Instruct`) from Hugging Face. Configure the model, device, generation limit, and prompt in `configs/config.yaml` under `qwen`, or override the model/device/token limit with `--model`, `--device`, and `--max-new-tokens`. Device defaults to `auto` (CUDA when available, otherwise CPU). The 7B model requires substantial memory; CPU inference is supported but may be slow, and a smaller compatible Qwen2.5-VL checkpoint can be selected when resources are limited.
-
-The command prints the parsed Markdown table and exits with an error if inference or parsing fails. This verifies VLM extraction only; it does not calculate RMS-F1 because that requires a paired gold table. The default `python main.py` mock smoke test is unchanged.
-
-### 6. Evaluate the Local ChartQA Test Split with DePlot
+### 5. Evaluate the Local ChartQA Test Split with DePlot
 ```bash
 python main.py --chartqa
 ```
 Runs the configured DePlot model on `data/raw/ChartQA_Dataset/test`, evaluates every chart image, and writes one JSONL record per sample under `outputs/predictions/`. Each record includes the image path, backend, unmodified model text, parse status, evaluation metrics, and any extraction or parsing error. The dataset must already be present locally; Transformers may download model weights if they are not cached.
 
-### 7. Evaluate ChartQA with Gemini or Claude
+### 6. Evaluate ChartQA with Gemini or Claude
 Install the requirements, set the API key for the provider you intend to use, then explicitly select that backend:
 
 ```powershell
@@ -159,7 +232,7 @@ $env:ANTHROPIC_API_KEY = "..."
 python main.py --chartqa --backend claude
 ```
 
-The default hosted-API models are `gemini-2.5-flash` and `claude-sonnet-4-6`; edit `api_vlm` in `configs/config.yaml` to select other supported models. Keys are read from environment variables and are not written to the response cache. Hosted API runs are capped at 10 samples by default; set a different cap with `--max-samples 25`, or explicitly evaluate the full dataset with `--no-sample-limit`. `--no-api-cache` disables local cache reads and writes. Successful responses are cached under `.cache/chart_to_table/api_responses`, keyed by provider, model, prompt, and image content.
+The default hosted-API models are `gemini-1.5-flash` and `claude-3-5-sonnet-20241022`; edit `api_vlm` in `configs/config.yaml` to select other supported models. Keys are read from environment variables and are not written to the response cache. Hosted API runs are capped at 10 samples by default; set a different cap with `--max-samples 25`, or explicitly evaluate the full dataset with `--no-sample-limit`. `--no-api-cache` disables local cache reads and writes. Successful responses are cached under `.cache/chart_to_table/api_responses`, keyed by provider, model, prompt, and image content.
 
 **Billing notice:** Hosted model calls can incur provider charges. Gemini offers a limited free tier for eligible models and quotas; Claude API usage is billed separately from ordinary Claude chat subscriptions. Pricing and free-tier terms can change; consult the official [Gemini API pricing](https://ai.google.dev/gemini-api/docs/pricing) and [Anthropic API pricing](https://platform.claude.com/docs/en/about-claude/pricing) before running. The sample cap and local cache reduce repeated usage but are not a hard spending limit. Tests use mock clients and do not call paid APIs.
 =======
