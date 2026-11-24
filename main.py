@@ -121,6 +121,7 @@ def build_extraction_harness(
         ClaudeVLMBackend,
         DePlotBackend,
         GeminiVLMBackend,
+        OpenVLMBackend,
         VLMTableHarness,
     )
 
@@ -134,8 +135,25 @@ def build_extraction_harness(
             target_format="deplot",
         )
 
+    if backend_name == "qwen":
+        qwen_config = config.get("qwen", {})
+        return VLMTableHarness(
+            backend=OpenVLMBackend(
+                model_name=qwen_config.get(
+                    "model_name_or_path", OpenVLMBackend.DEFAULT_MODEL_NAME
+                ),
+                device=qwen_config.get("device", "auto"),
+                max_new_tokens=qwen_config.get("max_new_tokens", 256),
+                quantization=qwen_config.get("quantization", "4bit"),
+            ),
+            target_format="markdown",
+            prompt=qwen_config.get("prompt"),
+        )
+
     if backend_name not in ("gemini", "claude"):
-        raise ValueError("backend_name must be 'deplot', 'gemini', or 'claude'")
+        raise ValueError(
+            "backend_name must be 'deplot', 'qwen', 'gemini', or 'claude'"
+        )
 
     api_config = config.get("api_vlm", {})
     provider_config = api_config.get(backend_name, {})
@@ -245,7 +263,7 @@ def run_chartqa_evaluation(
     no_sample_limit: bool = False,
     disable_api_cache: bool = False,
 ) -> None:
-    """Runs DePlot or a hosted vision API across the local ChartQA test split."""
+    """Runs a local model or hosted vision API across the local ChartQA test split."""
     if max_samples is not None and max_samples < 1:
         raise ValueError("max_samples must be a positive integer")
 
@@ -270,7 +288,7 @@ def run_chartqa_evaluation(
     if not items:
         raise RuntimeError(f"No ChartQA samples found in {dataset_root}\\{split}")
 
-    if backend_name == "deplot":
+    if backend_name in ("deplot", "qwen"):
         harness = build_extraction_harness(
             backend_name, config, project_root
         )
@@ -320,7 +338,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     input_group.add_argument(
         "--chartqa",
         action="store_true",
-        help="Evaluate the local ChartQA test split with DePlot or a hosted vision API.",
+        help="Evaluate the local ChartQA test split with a selected backend.",
     )
     input_group.add_argument(
         "--image",
@@ -329,7 +347,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     parser.add_argument(
         "--backend",
-        choices=("deplot", "gemini", "claude"),
+        choices=("deplot", "qwen", "gemini", "claude"),
         help="Chart extraction backend for --image or --chartqa (default: deplot).",
     )
     sample_limit_group = parser.add_mutually_exclusive_group()
