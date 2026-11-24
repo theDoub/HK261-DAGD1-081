@@ -46,18 +46,28 @@ def normalize_value(val: Any) -> Any:
     if not s or s.lower() in ("none", "null", "nan", "n/a", "-"):
         return None
 
-    # Remove currency symbols ($ € £ ¥ ₫ ₹), commas, and percent signs
     cleaned = re.sub(r"[\$,€,£,¥,₫,₹,%]", "", s).strip()
-    # Also remove commas used as thousands separators
     cleaned_num = cleaned.replace(",", "")
 
-    # Try parsing as integer or float
     try:
         if "." in cleaned_num or "e" in cleaned_num.lower():
             return float(cleaned_num)
         return int(cleaned_num)
     except ValueError:
-        # If not a valid number, return original trimmed string
+        unit_match = re.match(
+            r"^(?:[<>~≈]\s*)?([+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?)"
+            r"(?:\s+[a-zA-Z%°/]+|(?:kg|mg|mw|gw|kw|km|cm|mm|bn|mn|g|m|k|b))?$",
+            cleaned,
+            re.IGNORECASE,
+        )
+        if unit_match:
+            num_str = unit_match.group(1).replace(",", "")
+            try:
+                if "." in num_str or "e" in num_str.lower():
+                    return float(num_str)
+                return int(num_str)
+            except ValueError:
+                return s
         return s
 
 
