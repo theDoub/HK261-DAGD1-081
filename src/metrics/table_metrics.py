@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
+from src.format.parser import normalize_header
 from src.format.schema import TableSchema, TableTriplet
 
 
@@ -280,7 +281,7 @@ def _normalize_confirmed_transpose(pred: TableSchema, gold: TableSchema) -> Tabl
     )
 
     normalized_headers = [
-        str(pred.rows[pred_row_index][0])
+        normalize_header(str(pred.rows[pred_row_index][0]))
         for pred_row_index in ordered_pred_rows
     ]
 
