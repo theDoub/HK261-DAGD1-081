@@ -131,7 +131,7 @@ def _extract_schema(table: Union[TableSchema, Dict[str, Any], Any]) -> Optional[
     return None
 
 
-def _transpose_table_schema(schema: TableSchema) -> Optional[TableSchema]:
+def transpose_table_schema(schema: TableSchema) -> Optional[TableSchema]:
     if len(schema.columns) < 2 or not schema.rows:
         return None
     corner = str(schema.columns[0])
@@ -146,6 +146,24 @@ def _transpose_table_schema(schema: TableSchema) -> Optional[TableSchema]:
         ]
         new_rows.append([header_val] + row_vals)
     return TableSchema(title=schema.title, columns=new_columns, rows=new_rows)
+
+
+def select_best_orientation(
+    pred_table: TableSchema,
+    gt_table: TableSchema,
+    tau: float = 0.5,
+    eps: float = 1e-6,
+) -> TableSchema:
+    transposed_schema = transpose_table_schema(pred_table)
+    if transposed_schema is None:
+        return pred_table
+    direct = _compute_rms_f1_directed(
+        pred_table.triplets, gt_table.triplets, tau=tau, eps=eps
+    )
+    transposed = _compute_rms_f1_directed(
+        transposed_schema.triplets, gt_table.triplets, tau=tau, eps=eps
+    )
+    return pred_table if direct["f1"] >= transposed["f1"] else transposed_schema
 
 
 def _compute_rms_f1_directed(
@@ -216,7 +234,7 @@ def compute_rms_f1(
     if pred_schema is None:
         return direct
 
-    transposed_schema = _transpose_table_schema(pred_schema)
+    transposed_schema = transpose_table_schema(pred_schema)
     if transposed_schema is None:
         return direct
 

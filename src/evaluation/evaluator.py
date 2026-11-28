@@ -19,6 +19,7 @@ from src.metrics.table_metrics import (
     compute_rms_f1,
     compute_rnss,
     compute_value_recall_at_5,
+    select_best_orientation,
 )
 from src.models.harness import ExtractionResult, VLMTableHarness
 
@@ -53,14 +54,16 @@ def categorize_error(
     if pred_table is None or len(pred_table.rows) == 0 or len(pred_table.columns) == 0:
         return "missing_data"
 
-    pred_cols = set(c.strip().lower() for c in pred_table.columns)
+    aligned_pred = select_best_orientation(pred_table, gt_table)
+
+    pred_cols = set(c.strip().lower() for c in aligned_pred.columns)
     gt_cols = set(c.strip().lower() for c in gt_table.columns)
     col_overlap = len(pred_cols & gt_cols) / max(len(gt_cols), 1)
 
     if col_overlap < 0.5:
         return "header_mismatch"
 
-    if len(pred_table.rows) != len(gt_table.rows) or len(pred_table.columns) != len(gt_table.columns):
+    if len(aligned_pred.rows) != len(gt_table.rows) or len(aligned_pred.columns) != len(gt_table.columns):
         return "structural_error"
 
     return "numeric_error"
