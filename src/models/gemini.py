@@ -17,7 +17,7 @@ from src.models.api_cache import APIResponseCache
 class GeminiHarness:
     """Runs Gemini vision requests and caches successful responses."""
 
-    DEFAULT_MODEL = "gemini-3.5-flash-lite"
+    DEFAULT_MODEL = "gemini-3.6-flash"
 
     def __init__(
         self,
