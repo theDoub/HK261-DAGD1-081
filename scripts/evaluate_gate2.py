@@ -42,9 +42,18 @@ def build_harness(
     quantization: str = "none",
     model_name: Optional[str] = None,
     max_new_tokens: int = 256,
+    output_format: str = "markdown",
+    prompt: Optional[str] = None,
 ) -> VLMTableHarness:
     """Builds VLMTableHarness configured for the specified backend."""
     backend_lower = backend_name.lower()
+    if output_format not in {"markdown", "linearized"}:
+        raise ValueError("output_format must be either 'markdown' or 'linearized'")
+    if output_format == "linearized" and backend_lower not in {"qwen", "open_vlm"}:
+        raise ValueError(
+            "Linearized output format is supported only for the 'qwen' backend "
+            "(OpenVLM alias 'open_vlm')."
+        )
 
     if backend_lower == "deplot":
         backend = DePlotBackend(device=None if device == "auto" else device)
@@ -71,7 +80,12 @@ def build_harness(
             quantization=quantization,
             max_new_tokens=max_new_tokens,
         )
-        return VLMTableHarness(backend=backend, target_format="markdown")
+        target_format = "deplot" if output_format == "linearized" else "markdown"
+        return VLMTableHarness(
+            backend=backend,
+            target_format=target_format,
+            prompt=prompt,
+        )
 
     elif backend_lower == "gemini":
         model_name = None
@@ -83,7 +97,7 @@ def build_harness(
                     model_name = cfg.get("api_vlm", {}).get("gemini", {}).get("model_name")
             except Exception:
                 pass
-        return VLMTableHarness(backend=GeminiVLMBackend(model_name=model_name), target_format="markdown")
+        return VLMTableHarness(backend=GeminiVLMBackend(model_name=model_name), target_format="markdown", prompt=prompt)
 
     elif backend_lower == "claude":
         model_name = None
@@ -95,10 +109,10 @@ def build_harness(
                     model_name = cfg.get("api_vlm", {}).get("claude", {}).get("model_name")
             except Exception:
                 pass
-        return VLMTableHarness(backend=ClaudeVLMBackend(model_name=model_name), target_format="markdown")
+        return VLMTableHarness(backend=ClaudeVLMBackend(model_name=model_name), target_format="markdown", prompt=prompt)
 
     elif backend_lower == "mock":
-        return VLMTableHarness(backend=MockBackend(), target_format="markdown")
+        return VLMTableHarness(backend=MockBackend(), target_format="markdown", prompt=prompt)
 
     else:
         raise ValueError(
@@ -116,8 +130,16 @@ def evaluate_gate2(
     prompt_override: Optional[str] = None,
     sample_ids: Optional[Sequence[str]] = None,
     max_new_tokens: Optional[int] = None,
+    output_format: str = "markdown",
 ) -> Dict[str, Any]:
     """Runs Gate 2 evaluation across real ChartQA samples and computes RMS-F1."""
+    if output_format not in {"markdown", "linearized"}:
+        raise ValueError("output_format must be either 'markdown' or 'linearized'")
+    if output_format == "linearized" and backend_name.lower() not in {"qwen", "open_vlm"}:
+        raise ValueError(
+            "Linearized output format is supported only for the 'qwen' backend "
+            "(OpenVLM alias 'open_vlm')."
+        )
     loader = ChartDataLoader(data_dir=data_dir, split=".")
     items: List[ChartDatasetItem] = loader.scan_dataset()
 
@@ -157,7 +179,18 @@ def evaluate_gate2(
     model_name: Optional[str] = None
     if backend_lower in {"qwen", "open_vlm"}:
         model_name = qwen_config.get("model_name_or_path")
-        active_prompt = qwen_config.get("prompt")
+        if output_format == "linearized":
+            active_prompt = (
+                qwen_config.get("prompt_linearized")
+                or qwen_config.get("linearized_prompt")
+                or qwen_config.get("prompt")
+            )
+        else:
+            active_prompt = (
+                qwen_config.get("prompt_markdown")
+                or qwen_config.get("markdown_prompt")
+                or qwen_config.get("prompt")
+            )
     elif backend_lower == "gemini":
         model_name = api_config.get("gemini", {}).get("model_name")
         active_prompt = api_config.get("gemini", {}).get("prompt") or cfg.get("gemini", {}).get("prompt")
@@ -186,6 +219,8 @@ def evaluate_gate2(
         quantization=quantization,
         model_name=model_name,
         max_new_tokens=max_new_tokens,
+        output_format=output_format,
+        prompt=active_prompt,
     )
 
     records: List[Dict[str, Any]] = []
@@ -259,6 +294,7 @@ def evaluate_gate2(
         ),
         "backend": backend_name,
         "conditions": {
+            "output_format": output_format,
             "model_name_or_path": model_name,
             "device_requested": device,
             "device_used": getattr(harness.backend, "device", device),
@@ -335,6 +371,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         type=int,
         help="Maximum generated tokens (defaults to qwen.max_new_tokens in configs/config.yaml)",
     )
+    parser.add_argument(
+        "--output-format",
+        default="markdown",
+        choices=["markdown", "linearized"],
+        help="Qwen output representation and parser (linearized is Qwen/OpenVLM only)",
+    )
     parser.add_argument("--prompt-file", type=Path, help="UTF-8 file containing the exact prompt to use")
     parser.add_argument(
         "--sample-ids-file",
@@ -365,6 +407,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         prompt_override=prompt_override,
         sample_ids=sample_ids,
         max_new_tokens=args.max_new_tokens,
+        output_format=args.output_format,
     )
 
     print_kpi_summary(summary)
