@@ -8,7 +8,11 @@ from typing import Optional
 
 import pytest
 
-from scripts.evaluate_gate2 import build_harness, evaluate_gate2
+from scripts.evaluate_gate2 import (
+    build_harness,
+    evaluate_gate2,
+    get_backend_task_metadata,
+)
 from src.models.harness import MockBackend, VLMTableHarness
 from src.data_loader.loader import ChartDataLoader
 
@@ -43,7 +47,9 @@ def test_gate2_evaluation_runs_end_to_end_on_real_chartqa(tmp_path: Path):
         output_path=output_report,
     )
 
-    assert summary["gate"] == "Gate 2 (First Real RMS-F1 on ChartQA)"
+    assert summary["week"] == 7
+    assert summary["task_id"] == "7.2"
+    assert summary["gate"] == "Pipeline End-to-End Verification (Mock)"
     assert summary["total_samples_evaluated"] == 3
     assert "mean_rms_f1" in summary
     assert "mean_rnss" in summary
@@ -51,12 +57,31 @@ def test_gate2_evaluation_runs_end_to_end_on_real_chartqa(tmp_path: Path):
     assert "error_distribution" in summary
     assert len(summary["records"]) == 3
 
-    # Check generated JSON file
     assert output_report.exists()
     with open(output_report, "r", encoding="utf-8") as f:
         data = json.load(f)
     assert data["total_samples_evaluated"] == 3
     assert len(data["records"]) == 3
+
+
+@pytest.mark.parametrize(
+    ("backend_name", "expected_week", "expected_task"),
+    [
+        ("qwen", 7, "7.3"),
+        ("gemini", 8, "8.2"),
+        ("claude", 8, "8.2"),
+        ("deplot", 12, "12.1"),
+        ("mock", 7, "7.2"),
+    ],
+)
+def test_backend_task_metadata_matches_weekly_plan(
+    backend_name: str,
+    expected_week: int,
+    expected_task: str,
+):
+    meta = get_backend_task_metadata(backend_name)
+    assert meta["week"] == expected_week
+    assert meta["task_id"] == expected_task
 
 
 def test_gate2_prompt_override_and_sample_order_are_recorded(tmp_path: Path, monkeypatch):

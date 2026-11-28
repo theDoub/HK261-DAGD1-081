@@ -123,40 +123,61 @@ def _extract_triplets(table: Union[TableSchema, Dict[str, Any], Any]) -> List[Ta
     return []
 
 
-def compute_rms_f1(
-    pred_table: Any,
-    gt_table: Any,
+def _extract_schema(table: Union[TableSchema, Dict[str, Any], Any]) -> Optional[TableSchema]:
+    if isinstance(table, TableSchema):
+        return table
+    if isinstance(table, dict):
+        return TableSchema.from_dict(table)
+    return None
+
+
+def transpose_table_schema(schema: TableSchema) -> Optional[TableSchema]:
+    if len(schema.columns) < 2 or not schema.rows:
+        return None
+    corner = str(schema.columns[0])
+    new_columns = [corner] + [
+        str(row[0]) if row else f"row_{idx}" for idx, row in enumerate(schema.rows)
+    ]
+    new_rows: List[List[Any]] = []
+    for col_idx in range(1, len(schema.columns)):
+        header_val = schema.columns[col_idx]
+        row_vals = [
+            row[col_idx] if col_idx < len(row) else None for row in schema.rows
+        ]
+        new_rows.append([header_val] + row_vals)
+    return TableSchema(title=schema.title, columns=new_columns, rows=new_rows)
+
+
+def select_best_orientation(
+    pred_table: TableSchema,
+    gt_table: TableSchema,
+    tau: float = 0.5,
+    eps: float = 1e-6,
+) -> TableSchema:
+    transposed_schema = transpose_table_schema(pred_table)
+    if transposed_schema is None:
+        return pred_table
+    direct = _compute_rms_f1_directed(
+        pred_table.triplets, gt_table.triplets, tau=tau, eps=eps
+    )
+    transposed = _compute_rms_f1_directed(
+        transposed_schema.triplets, gt_table.triplets, tau=tau, eps=eps
+    )
+    return pred_table if direct["f1"] >= transposed["f1"] else transposed_schema
+
+
+def _compute_rms_f1_directed(
+    preds: List[TableTriplet],
+    gts: List[TableTriplet],
     tau: float = 0.5,
     eps: float = 1e-6,
 ) -> Dict[str, float]:
-    """Computes RMS-F1 between predicted and ground-truth table triplets.
-
-    Mathematical Definition:
-        1. Header matching: Normalized Levenshtein edit distance NL_tau(h_p, h_t).
-        2. Value matching: Relative numerical distance D(v_p, v_t).
-        3. Pair similarity: sim(p, t) = (1 - NL_tau) * (1 - D) in [0.0, 1.0].
-        4. Bipartite matching: Optimal assignment via Hungarian algorithm.
-        5. Score aggregation: Precision P, Recall R, Harmonic Mean F1.
-
-    Args:
-        pred_table: Predicted TableSchema, dict, or list of triplets.
-        gt_table: Ground-truth TableSchema, dict, or list of triplets.
-        tau: Header distance threshold (default: 0.5).
-        eps: Stability constant for division.
-
-    Returns:
-        Dict[str, float]: Dictionary with 'precision', 'recall', and 'f1'.
-    """
-    preds = _extract_triplets(pred_table)
-    gts = _extract_triplets(gt_table)
-
     n_pred, m_gt = len(preds), len(gts)
     if n_pred == 0 and m_gt == 0:
         return {"precision": 1.0, "recall": 1.0, "f1": 1.0}
     if n_pred == 0 or m_gt == 0:
         return {"precision": 0.0, "recall": 0.0, "f1": 0.0}
 
-    # Construct similarity matrix [n_pred, m_gt]
     cost_matrix = np.ones((n_pred, m_gt), dtype=np.float64)
     sim_matrix = np.zeros((n_pred, m_gt), dtype=np.float64)
 
@@ -178,6 +199,49 @@ def compute_rms_f1(
         "recall": float(recall),
         "f1": float(f1),
     }
+
+
+def compute_rms_f1(
+    pred_table: Any,
+    gt_table: Any,
+    tau: float = 0.5,
+    eps: float = 1e-6,
+) -> Dict[str, float]:
+    """Computes RMS-F1 between predicted and ground-truth table triplets.
+
+    Mathematical Definition:
+        1. Header matching: Normalized Levenshtein edit distance NL_tau(h_p, h_t).
+        2. Value matching: Relative numerical distance D(v_p, v_t).
+        3. Pair similarity: sim(p, t) = (1 - NL_tau) * (1 - D) in [0.0, 1.0].
+        4. Bipartite matching: Optimal assignment via Hungarian algorithm.
+        5. Score aggregation: Precision P, Recall R, Harmonic Mean F1,
+           taking the maximum F1 between direct and transposed predicted tables.
+
+    Args:
+        pred_table: Predicted TableSchema, dict, or list of triplets.
+        gt_table: Ground-truth TableSchema, dict, or list of triplets.
+        tau: Header distance threshold (default: 0.5).
+        eps: Stability constant for division.
+
+    Returns:
+        Dict[str, float]: Dictionary with 'precision', 'recall', and 'f1'.
+    """
+    preds = _extract_triplets(pred_table)
+    gts = _extract_triplets(gt_table)
+    direct = _compute_rms_f1_directed(preds, gts, tau=tau, eps=eps)
+
+    pred_schema = _extract_schema(pred_table)
+    if pred_schema is None:
+        return direct
+
+    transposed_schema = transpose_table_schema(pred_schema)
+    if transposed_schema is None:
+        return direct
+
+    transposed = _compute_rms_f1_directed(
+        transposed_schema.triplets, gts, tau=tau, eps=eps
+    )
+    return direct if direct["f1"] >= transposed["f1"] else transposed
 
 
 def compute_rnss(pred_table: Any, gt_table: Any, eps: float = 1e-6) -> float:

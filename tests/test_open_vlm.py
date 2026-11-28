@@ -9,7 +9,7 @@ from PIL import Image
 import pytest
 
 import main as cli
-from src.models.harness import OpenVLMBackend, VLMTableHarness
+from src.models.harness import BaseExtractionBackend, OpenVLMBackend, VLMTableHarness
 
 
 class FakeTensor:
@@ -227,11 +227,14 @@ def test_open_vlm_cuda_unavailable_is_reported_by_harness(tmp_path, monkeypatch)
 def test_qwen_cli_harness_uses_configured_backend_settings(monkeypatch, tmp_path):
     captured = {}
 
-    class FakeOpenVLMBackend:
+    class FakeOpenVLMBackend(BaseExtractionBackend):
         DEFAULT_MODEL_NAME = OpenVLMBackend.DEFAULT_MODEL_NAME
 
         def __init__(self, **kwargs):
             captured.update(kwargs)
+
+        def generate(self, prompt: str, image_path=None) -> str:
+            return ""
 
     monkeypatch.setattr(
         "src.models.harness.OpenVLMBackend",

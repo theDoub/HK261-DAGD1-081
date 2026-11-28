@@ -380,3 +380,34 @@ def test_backend_caches_harness_initialization_failure(backend_class, tmp_path):
         backend.generate("Extract", image_path)
 
     assert len(factory_calls) == 1
+
+
+def test_gemini_retries_on_transient_503_and_succeeds(tmp_path, monkeypatch):
+    image_path = create_chart(tmp_path / "chart.png")
+    sleep_calls = []
+    monkeypatch.setattr("src.models.gemini.time.sleep", sleep_calls.append)
+
+    class FlakyGeminiClient:
+        def __init__(self):
+            self.attempts = 0
+            self.models = self
+
+        def generate_content(self, **kwargs):
+            self.attempts += 1
+            if self.attempts < 3:
+                raise RuntimeError("503 UNAVAILABLE: high demand")
+            return SimpleNamespace(text="| Category | Value |\n|---|---|\n| A | 10 |")
+
+    client = FlakyGeminiClient()
+    harness = GeminiHarness(
+        client=client,
+        cache_enabled=False,
+        max_retries=3,
+        base_retry_delay=0.5,
+    )
+
+    result = harness.generate("Extract", image_path)
+
+    assert "| A | 10 |" in result
+    assert client.attempts == 3
+    assert len(sleep_calls) == 2

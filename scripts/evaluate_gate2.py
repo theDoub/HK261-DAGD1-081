@@ -35,6 +35,64 @@ import yaml
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
+BACKEND_TASK_METADATA: Dict[str, Dict[str, Any]] = {
+    "qwen": {
+        "week": 7,
+        "task_id": "7.3",
+        "stage_name": "Gate 2 (First Real RMS-F1 on ChartQA)",
+        "report_title": "WEEK 7 - GATE 2 REPORT: FIRST REAL RMS-F1 ON CHARTQA (TASK 7.3)",
+        "metric_label": "MEAN RMS-F1 (GATE 2 METRIC)",
+    },
+    "open_vlm": {
+        "week": 7,
+        "task_id": "7.3",
+        "stage_name": "Gate 2 (First Real RMS-F1 on ChartQA)",
+        "report_title": "WEEK 7 - GATE 2 REPORT: FIRST REAL RMS-F1 ON CHARTQA (TASK 7.3)",
+        "metric_label": "MEAN RMS-F1 (GATE 2 METRIC)",
+    },
+    "gemini": {
+        "week": 8,
+        "task_id": "8.2",
+        "stage_name": "Multi-Model API Benchmark (Gemini)",
+        "report_title": "WEEK 8 BENCHMARK REPORT: SECOND MODEL EVALUATION - GEMINI (TASK 8.2)",
+        "metric_label": "MEAN RMS-F1 (TASK 8.2)",
+    },
+    "claude": {
+        "week": 8,
+        "task_id": "8.2",
+        "stage_name": "Multi-Model API Benchmark (Claude)",
+        "report_title": "WEEK 8 BENCHMARK REPORT: SECOND MODEL EVALUATION - CLAUDE (TASK 8.2)",
+        "metric_label": "MEAN RMS-F1 (TASK 8.2)",
+    },
+    "deplot": {
+        "week": 12,
+        "task_id": "12.1",
+        "stage_name": "Baseline Comparison (DePlot)",
+        "report_title": "WEEK 12 BASELINE REPORT: DEPLOT EVALUATION ON CHARTQA (TASK 12.1)",
+        "metric_label": "MEAN RMS-F1 (TASK 12.1)",
+    },
+    "mock": {
+        "week": 7,
+        "task_id": "7.2",
+        "stage_name": "Pipeline End-to-End Verification (Mock)",
+        "report_title": "WEEK 7 PIPELINE VERIFICATION REPORT: MOCK BACKEND (TASK 7.2)",
+        "metric_label": "MEAN RMS-F1 (MOCK CHECK)",
+    },
+}
+
+
+def get_backend_task_metadata(backend_name: str) -> Dict[str, Any]:
+    key = backend_name.lower()
+    if key in BACKEND_TASK_METADATA:
+        return dict(BACKEND_TASK_METADATA[key])
+    return {
+        "week": None,
+        "task_id": "unknown",
+        "stage_name": f"Evaluation ({backend_name})",
+        "report_title": f"CHART-TO-TABLE EVALUATION REPORT ({backend_name.upper()})",
+        "metric_label": "MEAN RMS-F1",
+    }
+
 
 def build_harness(
     backend_name: str,
@@ -282,8 +340,15 @@ def evaluate_gate2(
         cat = r["error_category"]
         error_counts[cat] = error_counts.get(cat, 0) + 1
 
+    task_meta = get_backend_task_metadata(backend_name)
+
     summary = {
-        "gate": "Gate 2 (First Real RMS-F1 on ChartQA)",
+        "week": task_meta["week"],
+        "task_id": task_meta["task_id"],
+        "stage_name": task_meta["stage_name"],
+        "report_title": task_meta["report_title"],
+        "metric_label": task_meta["metric_label"],
+        "gate": task_meta["stage_name"],
         "dataset_name": "ChartQA Official Benchmark (Test Split)",
         "dataset_path": str(data_dir),
         "total_samples_evaluated": total_eval,
@@ -310,6 +375,7 @@ def evaluate_gate2(
             ),
             "sample_ids": [item.id for item in eval_items],
         },
+        "parse_success_count": parse_success_count,
         "parse_success_rate": round(parse_success_count / total_eval * 100, 2) if total_eval > 0 else 0.0,
         "mean_rms_f1": round(mean_f1, 4),
         "mean_precision": round(mean_prec, 4),
@@ -325,24 +391,37 @@ def evaluate_gate2(
         output_path.parent.mkdir(parents=True, exist_ok=True)
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(summary, f, indent=2)
-        logger.info("Saved Gate 2 evaluation report to %s", output_path)
+        logger.info("Saved evaluation report to %s", output_path)
 
     return summary
 
 
 def print_kpi_summary(summary: Dict[str, Any]) -> None:
+    title = summary.get("report_title") or "CHART-TO-TABLE BENCHMARK REPORT"
+    parse_rate = summary.get("parse_success_rate", 0.0)
+    total_eval = summary.get("total_samples_evaluated", 0)
+    parse_count = summary.get("parse_success_count")
+    if parse_rate == 100.0 and total_eval > 0:
+        parse_note = "All samples parsed cleanly"
+    elif parse_count is not None:
+        parse_note = f"{parse_count}/{total_eval} samples parsed"
+    else:
+        parse_note = "Partial parse success"
+    metric_label = summary.get("metric_label") or "MEAN RMS-F1"
+
     print("\n" + "=" * 75)
-    print(" GATE 2 ACCEPTANCE REPORT: FIRST REAL RMS-F1 ON CHARTQA (TASK 7.3)")
+    print(f" {title}")
     print("=" * 75)
+    print(f" Weekly Plan Milestone        : Week {summary.get('week')} | Task {summary.get('task_id')}")
     print(f" Benchmark Dataset            : {summary.get('dataset_name')}")
     print(f" Dataset Directory            : {summary.get('dataset_path')}")
-    print(f" Total Real Samples Evaluated : {summary.get('total_samples_evaluated')} (Images + Gold CSV Tables)")
+    print(f" Total Real Samples Evaluated : {total_eval} (Images + Gold CSV Tables)")
     print(f" Evaluation Mode / Target     : {summary.get('evaluation_mode')}")
-    print(f" Parse Success Rate (parse_ok): {summary.get('parse_success_rate')}% (All samples parsed cleanly)")
+    print(f" Parse Success Rate (parse_ok): {parse_rate}% ({parse_note})")
     print("-" * 75)
     print(f" Mean Precision                : {summary.get('mean_precision')}")
     print(f" Mean Recall                   : {summary.get('mean_recall')}")
-    print(f" MEAN RMS-F1 (GATE 2 METRIC)   : {summary.get('mean_rms_f1')} [*]")
+    print(f" {metric_label:<30}: {summary.get('mean_rms_f1')} [*]")
     print(f" Mean RNSS                     : {summary.get('mean_rnss')}")
     print(f" Mean Value-Recall@5%          : {summary.get('mean_value_recall_at_5')}")
     print("-" * 75)
