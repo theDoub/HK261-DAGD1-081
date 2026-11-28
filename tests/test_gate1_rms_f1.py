@@ -194,6 +194,84 @@ class TestGate1Mandatory:
 
 
 # =============================================================================
+# ── TEST BỔ SUNG: TRANSPOSE-AWARE RMS-F1 ──
+# =============================================================================
+
+class TestTransposeAwareRMSF1:
+    def test_exact_transpose_scores_perfectly(self):
+        """A structurally confirmed transpose is normalized before RMS-F1 matching."""
+        gold = TableSchema(
+            columns=["Year", "A", "B"],
+            rows=[[2021, 10.0, 11.0], [2022, 12.0, 13.0]],
+        )
+        pred = TableSchema(
+            columns=["Entity", "2021", "2022"],
+            rows=[["A", 10.0, 12.0], ["B", 11.0, 13.0]],
+        )
+
+        result = compute_rms_f1(pred, gold)
+
+        assert result["precision"] == pytest.approx(1.0, abs=1e-6)
+        assert result["recall"] == pytest.approx(1.0, abs=1e-6)
+        assert result["f1"] == pytest.approx(1.0, abs=1e-6)
+
+    def test_transpose_with_value_error_reduces_score(self):
+        """Normalization must preserve value errors from the prediction."""
+        gold = TableSchema(
+            columns=["Year", "A", "B"],
+            rows=[[2021, 10.0, 11.0], [2022, 12.0, 13.0]],
+        )
+        pred = TableSchema(
+            columns=["Entity", "2021", "2022"],
+            rows=[["A", 11.0, 12.0], ["B", 11.0, 13.0]],
+        )
+
+        result = compute_rms_f1(pred, gold)
+
+        assert result["f1"] < 1.0
+        assert result["recall"] == pytest.approx(0.9833333, abs=0.02)
+
+    def test_exact_transpose_does_not_repair_gold_values(self):
+        """A wrong supplied gold value still penalizes an otherwise exact transpose."""
+        supplied_gold = TableSchema(
+            columns=["Year", "Dissatisfied", "Satisfied"],
+            rows=[[2002, 79.0, 0.0], [2007, 66.0, 30.0]],
+        )
+        corrected_gold = TableSchema(
+            columns=["Year", "Dissatisfied", "Satisfied"],
+            rows=[[2002, 79.0, 16.0], [2007, 66.0, 30.0]],
+        )
+        pred_transposed = TableSchema(
+            columns=["Entity", "2002", "2007"],
+            rows=[
+                ["Dissatisfied", 79.0, 66.0],
+                ["Satisfied", 16.0, 30.0],
+            ],
+        )
+
+        assert compute_rms_f1(pred_transposed, corrected_gold)["f1"] == pytest.approx(
+            1.0,
+            abs=1e-6,
+        )
+        assert compute_rms_f1(pred_transposed, supplied_gold)["f1"] < 1.0
+
+    def test_row_permutation_uses_logical_row_key(self):
+        """Swapping values across logical rows must not appear to match."""
+        gold = TableSchema(
+            columns=["Year", "Sales"],
+            rows=[[2021, 100.0], [2022, 130.0]],
+        )
+        pred = TableSchema(
+            columns=["Year", "Sales"],
+            rows=[[2021, 130.0], [2022, 100.0]],
+        )
+
+        result = compute_rms_f1(pred, gold)
+
+        assert result["f1"] < 0.9
+
+
+# =============================================================================
 # ── TEST BỔ SUNG: RNSS theo đặc tả P05 ──
 # =============================================================================
 

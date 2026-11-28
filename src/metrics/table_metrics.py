@@ -123,6 +123,203 @@ def _extract_triplets(table: Union[TableSchema, Dict[str, Any], Any]) -> List[Ta
     return []
 
 
+def _to_schema(table: Union[TableSchema, Dict[str, Any], Any]) -> Optional[TableSchema]:
+    """Convert a supported table representation to TableSchema."""
+    if isinstance(table, TableSchema):
+        return table
+    if isinstance(table, dict):
+        return TableSchema.from_dict(table)
+    return None
+
+
+def _normalized_label(value: Any) -> str:
+    """Normalize a header or row label for structural matching."""
+    return str(value).strip().casefold()
+
+
+def _row_key(
+    table: TableSchema,
+    triplet: TableTriplet,
+    key_column_index: int,
+) -> Any:
+    """Return the logical row key for a cell triplet."""
+    if table.rows and 0 <= triplet.row < len(table.rows):
+        row = table.rows[triplet.row]
+        if key_column_index < len(row):
+            return row[key_column_index]
+    return None
+
+
+def _row_key_columns(
+    pred: TableSchema,
+    gold: TableSchema,
+) -> Tuple[int, int]:
+    """Find matching row-key columns, preferring the gold table's first column."""
+    if not pred.columns or not gold.columns:
+        return 0, 0
+
+    gold_key = _normalized_label(gold.columns[0])
+    for pred_index, pred_header in enumerate(pred.columns):
+        if _normalized_label(pred_header) == gold_key:
+            return pred_index, 0
+    return 0, 0
+
+
+def _values_equal(left: Any, right: Any) -> bool:
+    if left is None or right is None:
+        return False
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return float(left) == float(right)
+    return _normalized_label(left) == _normalized_label(right)
+
+
+def _best_label_match(
+    label: Any,
+    candidates: List[Any],
+) -> Optional[int]:
+    """Find an exact label match, or a unique close header match."""
+    label_key = _normalized_label(label)
+    exact = [
+        i
+        for i, candidate in enumerate(candidates)
+        if _normalized_label(candidate) == label_key
+    ]
+    if len(exact) == 1:
+        return exact[0]
+
+    close: List[Tuple[int, float]] = []
+    for i, candidate in enumerate(candidates):
+        nl = normalized_levenshtein(label_key, _normalized_label(candidate))
+        if nl <= 0.5:
+            close.append((i, nl))
+    if len(close) == 1:
+        return close[0][0]
+    return None
+
+
+def _cross_axis_evidence(pred: TableSchema, gold: TableSchema) -> bool:
+    """Detect transpose only from clear overlap between headers and axis labels."""
+    if len(pred.columns) < 2 or len(gold.columns) < 2:
+        return False
+    if not pred.rows or not gold.rows:
+        return False
+
+    pred_headers = pred.columns[1:]
+    gold_row_keys = [row[0] for row in gold.rows if row]
+    pred_row_keys = [row[0] for row in pred.rows if row]
+    gold_headers = gold.columns[1:]
+
+    pred_header_keys = {_normalized_label(v) for v in pred_headers}
+    gold_row_key_set = {_normalized_label(v) for v in gold_row_keys}
+    overlap_1 = pred_header_keys & gold_row_key_set
+    ratio_1 = len(overlap_1) / max(1, min(len(pred_header_keys), len(gold_row_key_set)))
+    axis_evidence_1 = (
+        ratio_1 >= 0.5
+        and len(overlap_1) >= 1
+        and len(pred_headers) == len(gold_row_keys)
+    )
+
+    pred_row_key_set = {_normalized_label(v) for v in pred_row_keys}
+    gold_header_set = {_normalized_label(v) for v in gold_headers}
+    overlap_2 = pred_row_key_set & gold_header_set
+    ratio_2 = len(overlap_2) / max(1, min(len(pred_row_key_set), len(gold_header_set)))
+    axis_evidence_2 = (
+        ratio_2 >= 0.5
+        and len(overlap_2) >= 1
+        and len(pred_row_keys) == len(gold_headers)
+    )
+
+    return axis_evidence_1 and axis_evidence_2
+
+
+def _normalize_confirmed_transpose(pred: TableSchema, gold: TableSchema) -> TableSchema:
+    """Normalize a structurally confirmed transposed prediction to gold orientation."""
+    if not _cross_axis_evidence(pred, gold):
+        return pred
+
+    gold_row_keys = [row[0] for row in gold.rows if row]
+    gold_data_headers = gold.columns[1:]
+
+    pred_column_by_gold_row: Dict[int, int] = {}
+    for gold_row_index, gold_key in enumerate(gold_row_keys):
+        match = next(
+            (
+                i
+                for i, pred_header in enumerate(pred.columns[1:])
+                if _normalized_label(pred_header) == _normalized_label(gold_key)
+            ),
+            None,
+        )
+        if match is not None:
+            pred_column_by_gold_row[gold_row_index] = match + 1
+
+    pred_row_by_gold_header: Dict[int, int] = {}
+    used_pred_rows = set()
+    for gold_header_index, gold_header in enumerate(gold_data_headers):
+        candidate_indices = [
+            i for i, row in enumerate(pred.rows) if row and i not in used_pred_rows
+        ]
+        match = _best_label_match(
+            gold_header,
+            [pred.rows[i][0] for i in candidate_indices],
+        )
+        if match is not None:
+            pred_row_index = candidate_indices[match]
+            pred_row_by_gold_header[gold_header_index] = pred_row_index
+            used_pred_rows.add(pred_row_index)
+
+    ordered_pred_rows = [
+        pred_row_by_gold_header[i]
+        for i in range(len(gold_data_headers))
+        if i in pred_row_by_gold_header
+    ]
+    ordered_pred_rows.extend(
+        i
+        for i, row in enumerate(pred.rows)
+        if row and i not in used_pred_rows
+    )
+
+    normalized_headers = [
+        str(pred.rows[pred_row_index][0])
+        for pred_row_index in ordered_pred_rows
+    ]
+
+    normalized_rows: List[List[Any]] = []
+    for gold_row_index, gold_key in enumerate(gold_row_keys):
+        pred_col_index = pred_column_by_gold_row.get(gold_row_index)
+        row_values: List[Any] = [gold_key]
+        for pred_row_index in ordered_pred_rows:
+            if pred_col_index is None:
+                row_values.append(None)
+            else:
+                pred_row = pred.rows[pred_row_index]
+                row_values.append(
+                    pred_row[pred_col_index]
+                    if pred_col_index < len(pred_row)
+                    else None
+                )
+        normalized_rows.append(row_values)
+
+    return TableSchema(
+        title=pred.title,
+        columns=[gold.columns[0], *normalized_headers],
+        rows=normalized_rows,
+        metadata=dict(pred.metadata),
+    )
+
+
+def _normalize_for_matching(
+    pred_table: Any,
+    gt_table: Any,
+) -> Tuple[Optional[TableSchema], Optional[TableSchema]]:
+    pred = _to_schema(pred_table)
+    gold = _to_schema(gt_table)
+    if pred is None or gold is None:
+        return None, None
+    pred = _normalize_confirmed_transpose(pred, gold)
+    return pred, gold
+
+
 def compute_rms_f1(
     pred_table: Any,
     gt_table: Any,
@@ -130,6 +327,10 @@ def compute_rms_f1(
     eps: float = 1e-6,
 ) -> Dict[str, float]:
     """Computes RMS-F1 between predicted and ground-truth table triplets.
+
+    A structurally confirmed transposed table is normalized to ground-truth
+    orientation before matching. Cells are matched by header and stable row
+    key, so row order and transpose layout do not affect values.
 
     Mathematical Definition:
         1. Header matching: Normalized Levenshtein edit distance NL_tau(h_p, h_t).
@@ -147,8 +348,13 @@ def compute_rms_f1(
     Returns:
         Dict[str, float]: Dictionary with 'precision', 'recall', and 'f1'.
     """
-    preds = _extract_triplets(pred_table)
-    gts = _extract_triplets(gt_table)
+    pred_schema, gt_schema = _normalize_for_matching(pred_table, gt_table)
+    if pred_schema is None or gt_schema is None:
+        preds = _extract_triplets(pred_table)
+        gts = _extract_triplets(gt_table)
+    else:
+        preds = pred_schema.triplets
+        gts = gt_schema.triplets
 
     n_pred, m_gt = len(preds), len(gts)
     if n_pred == 0 and m_gt == 0:
@@ -159,10 +365,20 @@ def compute_rms_f1(
     # Construct similarity matrix [n_pred, m_gt]
     cost_matrix = np.ones((n_pred, m_gt), dtype=np.float64)
     sim_matrix = np.zeros((n_pred, m_gt), dtype=np.float64)
+    if pred_schema is not None and gt_schema is not None:
+        pred_key_index, gt_key_index = _row_key_columns(pred_schema, gt_schema)
+    else:
+        pred_key_index, gt_key_index = 0, 0
 
     for i, p in enumerate(preds):
         for j, g in enumerate(gts):
             sim = compute_pair_similarity(p, g, tau=tau, eps=eps)
+            if pred_schema is not None and gt_schema is not None:
+                if len(pred_schema.columns) > 1 and len(gt_schema.columns) > 1:
+                    p_key = _row_key(pred_schema, p, pred_key_index)
+                    g_key = _row_key(gt_schema, g, gt_key_index)
+                    if p_key is not None and g_key is not None and not _values_equal(p_key, g_key):
+                        sim = 0.0
             sim_matrix[i, j] = sim
             cost_matrix[i, j] = 1.0 - sim
 
