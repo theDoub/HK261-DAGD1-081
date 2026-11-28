@@ -189,6 +189,7 @@ def evaluate_gate2(
     sample_ids: Optional[Sequence[str]] = None,
     max_new_tokens: Optional[int] = None,
     output_format: str = "markdown",
+    model_name_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Runs Gate 2 evaluation across real ChartQA samples and computes RMS-F1."""
     if output_format not in {"markdown", "linearized"}:
@@ -270,6 +271,11 @@ def evaluate_gate2(
         if not prompt_override.strip():
             raise ValueError("prompt_override must not be empty")
         active_prompt = prompt_override
+
+    if model_name_override is not None:
+        if not model_name_override.strip():
+            raise ValueError("model_name_override must not be empty")
+        model_name = model_name_override.strip()
 
     harness = build_harness(
         backend_name,
@@ -457,11 +463,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         help="Qwen output representation and parser (linearized is Qwen/OpenVLM only)",
     )
     parser.add_argument("--prompt-file", type=Path, help="UTF-8 file containing the exact prompt to use")
+    parser.add_argument("--model-name", default=None, help="Optional model name override for the selected backend")
     parser.add_argument(
         "--sample-ids-file",
         type=Path,
         help="UTF-8 newline-delimited sample IDs; preserves the listed order for paired evaluations",
     )
+    parser.add_argument("--model-name", default=None, help="Optional model name override")
     parser.add_argument("--output", default=Path("outputs/gate2_evaluation_report.json"), type=Path, help="Output JSON")
 
     args = parser.parse_args(argv)
@@ -487,6 +495,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         sample_ids=sample_ids,
         max_new_tokens=args.max_new_tokens,
         output_format=args.output_format,
+        model_name_override=args.model_name,
     )
 
     print_kpi_summary(summary)
