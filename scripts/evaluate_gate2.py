@@ -469,7 +469,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         type=Path,
         help="UTF-8 newline-delimited sample IDs; preserves the listed order for paired evaluations",
     )
-    parser.add_argument("--model-name", default=None, help="Optional model name override")
     parser.add_argument("--output", default=Path("outputs/gate2_evaluation_report.json"), type=Path, help="Output JSON")
 
     args = parser.parse_args(argv)
